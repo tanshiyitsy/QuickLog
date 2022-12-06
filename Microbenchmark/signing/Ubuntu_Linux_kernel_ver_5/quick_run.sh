@@ -1,9 +1,13 @@
 #!/bin/bash
 
 sudo dmesg --clear
+echo "start insmod"
 sudo insmod quickmod.ko len=64
+echo "end insmod"
 dmesg
+echo "end dmesg"
 sudo rmmod quickmod
+echo "end rmmod"
 
 
 # sudo dmesg --clear

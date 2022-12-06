@@ -1,5 +1,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+// #include <stdio>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -346,6 +347,7 @@ static void crypto_int(void)
 *                         2 bytes counter(<i>) and 14 bytes log data(M_i)
 * Output: T(64-byte tag)
 **/ 
+// Even Mansour 来更新密钥
 static __u64 mac_core( const char *log_msg, const int msg_len)
 {
 	block mask, cipher_blks[8], tag_blks[3];
@@ -366,16 +368,18 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	tag_blks[2] = _mm_loadu_si128(&current_key);  // 用key来初始化结果
 
 	// 每一个block 128 = 16 * 8 
+	// 有效消息长度: 14 * 8 = 112
 	if(remaining>=112)//start 8 blocks parallel computing 
 	{
+		// ？？？？？
 		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); // 读取一个block，然后向右移动两个字节
 		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
-		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容
+		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容, 前两个字节被换了
 		AES_ECB_8(cipher_blks,sched, mask); // mask用于初始异或每一个块
 		tag_8_xor(tag_blks,cipher_blks); // cipher_blks 8个块的结果异或，最终结果放在tag_blks[2]
 		counter +=8;
 		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	// 12 + 14 * 7 = 110
-		remaining -= 112;
+		remaining -= 112; // 为什么日志只处理了110，但是这里却减了112
 		while(remaining >= 112){	
 			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
 			gen_7_blks(cipher_blks,log_msg,counter);
@@ -412,11 +416,11 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	}
 #if 1
 	if (remaining){//last block + generating new key
-		if (counter)  log_msg +=2;  // 不是第一个块, 
+		if (counter)  log_msg +=2;  // 不是第一个块, log_msg向右移动两个字节？？？？
 		counter += (14-remaining); // 位置编码
 		* pad_zeros = zero_block();
 		* pad_header = counter;
-		memcpy(&my_pad[2], log_msg, remaining);
+		memcpy(&my_pad[2], log_msg, remaining); //0,1 放的是位置编码
 		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
 		cipher_blks[1] = xor_block(current_state, sched[0]);
 		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));
@@ -425,6 +429,7 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 		current_key = xor_block(cipher_blks[2], current_state);
 		current_state = xor_block(cipher_blks[1], current_state);
 	}else{
+		// 直接更新state && key
 		//pr_info("no remaining!\n");
 		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
 		cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
@@ -433,18 +438,10 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 		current_state = xor_block(cipher_blks[0], current_state);
 	}
 #endif
-	_mm_store_si128((block*)out_tmp, tag_blks[2]);
+	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
 
 	return (out_tmp[0]);
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -614,8 +611,28 @@ static u64 sign_event(char *log_msg, siphash_key_t first_key,size_t key_len)
 
 //---------------------------------------------------------------------------------------
 //endregion
+void print_block(block var)
+{
+	uint8_t *val = (uint8_t*)&var;
 
+    // uint16_t *val = (uint16_t*) &var;//can also use uint32_t instead of 16_t
+	pr_info("Numerical:");
+	for(int i = 0;i < 16;i++){
+		pr_info("i= %d, val = %d ", i, val[i]);
+	}
+	pr_info("\n");
+}
+void print_str(char* str,int len)
+{
+	uint8_t *val = (uint8_t*)str;
 
+    // uint16_t *val = (uint16_t*) &var;//can also use uint32_t instead of 16_t
+	pr_info("Numerical:");
+	for(int i = 0;i < len;i++){
+		pr_info("i= %d, val = %d ", i, val[i]);
+	}
+	pr_info("\n");
+}
 static int __init benchmarking(void)
 {
 	
@@ -633,8 +650,26 @@ static int __init benchmarking(void)
 	key_len = sizeof(first_key);
 	str = kmalloc(10240, GFP_KERNEL);
     memset(str,'a',(8192));
+	
+	/**
+	 * 
+	 * 
+	 
+	 char *msg;
+	msg = kmalloc(16, GFP_KERNEL);
+	memset(msg,'a',(14)); //16 * 8 = 128 = size(block)
+	int counter = 2;
+	pr_info("msg=%s\n", msg);
 
+	
+	print_str(msg, 16);
+	block blk = gen_logging_blk((block*)msg, counter); 
+	print_block(blk);
+	
 
+	return 8;
+	*/
+	
 	pr_info("\n_______Starting: log size = %dB______\n", len);
 	crypto_int();
 	
