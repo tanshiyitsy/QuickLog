@@ -27,7 +27,7 @@
 #include <linux/lsm_audit.h>
 
 
-#include "present.h"
+#include "./present.h"
 /**  
 * MAC, signing a log message and updating the signing-key & state
 * Input @log_msg: a log data,  
@@ -55,14 +55,16 @@ typedef __u64 block_64;
 typedef __m128i block_128;
 static block_128 current_key2;
 static block_64 current_key1[2];
+#define zero_block()          _mm_setzero_si128()
+// static block_128 Ek1(Block_128 block_128){
 
+// }
 static block_128 mac_core(const char *log_msg, const int msg_len){
 	uint16_t remaining = msg_len;
 
     block_64  blk_64[2], blk_cipher_64[2];
     block_128 temp_tag_128, blk_128; // temp_tag_128放置分块的中间结果, blk_128放分块结果
     uint8_t counter = 1,rounds = 31;
-    uint8_t present_rounds = 31;
     // uint8_t *present_plain; // 8 * 8
     uint8_t paylad_len = 14;
 
@@ -77,28 +79,39 @@ static block_128 mac_core(const char *log_msg, const int msg_len){
         present_rounds((uint8_t*)&blk_64[0], (uint8_t*)&current_key1[0], rounds, (uint8_t*)&blk_cipher_64[0]);
         present_rounds((uint8_t*)&blk_64[1], (uint8_t*)&current_key1[1], rounds, (uint8_t*)&blk_cipher_64[1]);
         // 3. 将blk_cipher_64[2]转换为block128, 和中间结果temp_tag_128异或
-        temp_tag_128 = xor_block(temp_tag_128, (block_128*)blk_cipher_64);
+        temp_tag_128 = xor_block(temp_tag_128, ((block_128*)blk_cipher_64)[0]);
         counter = counter + 1;
         log_msg += 14;
         remaining -= 14;
     }
     
+    unsigned char my_pad[16];
     if(remaining){
         pr_info("remaining=%d", remaining);
-        // 拼接上0
+        // 末尾拼接上10*
+        memcpy(my_pad, log_msg, remaining); // 0,1 放的是位置编码
+        my_pad[remaining] = '1';
+        for(int i = remaining+1;i < 16;i++){
+            my_pad[i] = '0';
+        }
+        pr_info("after padding....");
+        for(int i = 0;i < 16;i++){
+            pr_info("i= %d, val = %c ", i, my_pad[i]);
+        }
+        temp_tag_128 = xor_block(temp_tag_128, *(block_128*)my_pad);
     }else{
         pr_info("No remaining");
-        // temp_tag_128
-        temp_tag_128 = _mm_aesenc_si128(temp_tag_128, current_key2); 
     }
     
-
+    temp_tag_128 = _mm_aesenc_si128(temp_tag_128, current_key2);  // 最后结果经过aes，可以截取前t位
+    
     // 更新密钥
     
     return temp_tag_128;
 }
 void print_str(char* str,int len)
 {
+    pr_info("msg:");
 	uint8_t *val = (uint8_t*)str;
 
     // uint16_t *val = (uint16_t*) &var;//can also use uint32_t instead of 16_t
@@ -118,18 +131,41 @@ void print_block64(block_64 var)
 	}
 	pr_info("\n");
 }
-static int __init benchmarking(void){
-    //
-    char *msg;
-    int len = 21;
-    msg = kmalloc(len, GFP_KERNEL);
-	memset(msg,'a',len); 
-	pr_info("msg=%s\n", msg);
+void print_block128(block_128 var)
+{
+	uint8_t *val = (uint8_t*)&var;
 
-    __u64 ret = mac_core(msg, len);
-    pr_info("ret:");
-    print_block64(ret);
-    return ret;
+    // uint16_t *val = (uint16_t*) &var;//can also use uint32_t instead of 16_t
+	for(int i = 0;i < 16;i++){
+		pr_info("i= %d, val = %d ", i, val[i]);
+	}
+	pr_info("\n");
+}
+/*Initial
+初始化初始密钥
+*/
+static void crypto_int(void)
+{
+	
+}
+
+static int __init benchmarking(void){    
+    char *msg1,*msg2;
+    int len1 = 28,len2 = 24; // 一个块14 个字节,msg1刚好分成两个块, msg2最后一个块需要填充10*
+    msg1 = kmalloc(len1, GFP_KERNEL);
+    msg2 = kmalloc(len2, GFP_KERNEL);
+	memset(msg1,'a',len1); 
+    memset(msg2,'b',len2); 
+	print_str(msg1, len1);
+    print_str(msg2, len2);
+
+    block_128 ret1 = mac_core(msg1, len1);
+    block_128 ret2 = mac_core(msg2, len2);
+    pr_info("ret1:");
+    print_block128(ret1);
+    pr_info("ret2:");
+    print_block128(ret2);
+    return 0;
 }
 
 static void __exit quickmod_exit(void)

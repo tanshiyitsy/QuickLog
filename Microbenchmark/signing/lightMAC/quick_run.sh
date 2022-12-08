@@ -2,7 +2,7 @@
 
 # sudo dmesg --clear   # 显示开机信息
 sudo insmod lightmac.ko len=64   #insmod 直接编译进内核
-# dmesg
+dmesg
 sudo rmmod lightmac  # 删除这个模块
 
 

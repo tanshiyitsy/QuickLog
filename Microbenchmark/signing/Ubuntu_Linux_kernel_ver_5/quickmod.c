@@ -420,7 +420,7 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 		counter += (14-remaining); // 位置编码
 		* pad_zeros = zero_block();
 		* pad_header = counter;
-		memcpy(&my_pad[2], log_msg, remaining); //0,1 放的是位置编码
+		memcpy(&my_pad[2], log_msg, remaining); // 0,1 放的是位置编码
 		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
 		cipher_blks[1] = xor_block(current_state, sched[0]);
 		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));
@@ -524,8 +524,8 @@ static void mac_core_2(const char *log_msg, const int msg_len)
 		* pad_header = counter;
 		memcpy(&my_pad[2], log_msg, remaining);
 		cipher_blks[0] = xor_block( mask, *(block*)my_pad);
-		cipher_blks[1] = xor_block(current_state, sched[0]);
-		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));
+		cipher_blks[1] = xor_block(current_state, sched[0]); /*0 for updatting state*/
+		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
 		AES_ECB_3(cipher_blks, sched);
 		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]);
 		current_key = xor_block(cipher_blks[2], current_state);
