@@ -39,7 +39,14 @@ static unsigned long long my_time[320000], quick_med[10];
 // Sources: OCB Version 3 Reference Code (Optimized C)  
 // https://www.cs.ucdavis.edu/~rogaway/ocb/news/code/ocb.c
 //
-
+/**
+ * _mm_shuffle_ps(a: __m128, b: __m128, const MASK: i32) -> __m128, 将mask(128位分为两部分), 低的一半 = mask低的一半 & a； 高的一半 = mask高的一半 & b
+ * _mm_shuffle_epi32(a: __m128i, const IMM8: i32) -> __m128i Shuffles 32-bit integers in a using the control in IMM8.
+ * 
+ * _mm_castps_si128(a: __m128) -> __m128i Casts a 128-bit floating-point vector of [4 x float] into a 128-bit integer vector.
+ * _mm_castsi128_ps（a: __m128i）Casts a 128-bit integer vector into a 128-bit floating-point vector of
+ * 
+*/
 #define EXPAND_ASSIST(v1,v2,v3,v4,shuff_const,aes_const)                    \
   do{                                                                       \
     v2 = _mm_aeskeygenassist_si128(v4,aes_const);                           \
@@ -58,7 +65,7 @@ void AES_128_Key_Expansion(const unsigned char *userkey, void *key)
 {
     __m128i x0,x1,x2;
     __m128i *kp = (__m128i *)key;
-    kp[0] = x0 = _mm_loadu_si128((__m128i*)userkey);
+    kp[0] = x0 = _mm_loadu_si128((__m128i*)userkey); // _mm_loadu_si128 将128位整数数据从内存加载到新的向量中。
     x2 = _mm_setzero_si128();
     EXPAND_ASSIST(x0,x1,x2,x0,255,1);   kp[1]  = x0;
     EXPAND_ASSIST(x0,x1,x2,x0,255,2);   kp[2]  = x0;
@@ -284,8 +291,8 @@ uint64_t sign_core( const unsigned char *log_msg, const int *len,  const block *
 
 	if(remaining>=112)//start 8 blocks parallel computing 
 	{
-		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); 
-		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0);
+		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2);  // 读取一个block，然后向右移动两个字节
+		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
 		gen_7_blks(cipher_blks,log_msg,counter);
 		AES_ECB_8(cipher_blks,sched, mask);
 		tag_blks_xor_8(tag_blks,cipher_blks);
@@ -339,15 +346,15 @@ uint64_t sign_core( const unsigned char *log_msg, const int *len,  const block *
 		log_msg +=12;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
 	}
 	if (remaining){//last block + generating new key
-		if (counter)  log_msg +=2;
+		if (counter)  log_msg +=2; // 不是第一个块
 		counter +=(14-remaining);
 		tmp.bl = zero_block();
-		tmp.u16[0]= counter;
+		tmp.u16[0]= counter; // 第一个位置放counter
 		while(remaining--){
 			tmp.u8[remaining+1]=log_msg[remaining-1];
 		}
 		tmp.bl = xor_block(tmp.bl, mask);
-		aes_single(cipher_blks, sched, mask);
+		aes_single(cipher_blks, sched, mask);  // aes的结果放到cipher_blks中
 		tag_blks[2] = xor_block(tag_blks[2], tmp.bl);	
 	}
     
@@ -466,7 +473,8 @@ uint64_t verify_core( const unsigned char *log_msg, const int *len,  const block
 ***/
 static void quickmod_int(void){
 	block * sched_key;
-	s_0 = _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000);
+	s_0 = _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000);  // 使用提供的值以相反顺序设置压缩32位整数。
+	// 最终的结果放到 const_aeskey中
 	AES_128_Key_Expansion(aeskey,&const_aeskey); //expand aes round keys
 	sched_key = ((block *)(const_aeskey.rd_key)); //point to AES round keys
 	my_update(&signing_pair[0], &s_0,  sched_key);

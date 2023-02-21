@@ -32,7 +32,8 @@
 static int len= 256; //generating size
 module_param(len,int,S_IRUGO);  
 
-#define iteration 200000
+// #define iteration 200000
+#define iteration 100
 
 
 typedef __m128i block;
@@ -138,8 +139,8 @@ void AES_128_Key_Expansion(const unsigned char *userkey, void *key)
 
 #define enc_8(cipher_blks, key)                                 \
 	do{                                                         \
-		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], key); \
 		cipher_blks[1] = _mm_aesenc_si128(cipher_blks[1], key); \
+		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], key); \
 		cipher_blks[2] = _mm_aesenc_si128(cipher_blks[2], key); \
 		cipher_blks[3] = _mm_aesenc_si128(cipher_blks[3], key); \
 		cipher_blks[4] = _mm_aesenc_si128(cipher_blks[4], key); \
@@ -244,7 +245,8 @@ void AES_128_Key_Expansion(const unsigned char *userkey, void *key)
 	}while (0)
 
 
-
+// prernd_8 是在干嘛
+// _mm_aesenclast_si128 是AES的最后一轮加密，sched[10]是round_key
 #define AES_ECB_8(cipher_blks, sched, sign_keys)   \
 	do{                                        	   \
 		prernd_8(cipher_blks,sign_keys);           \
@@ -353,6 +355,7 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	block mask, cipher_blks[8], tag_blks[3];
 	unsigned char my_pad[16];
 	__u64 out_tmp[2];
+	// sched是固定的AES的key，长度为11个block
 	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
 	register block * aes_blks = cipher_blks;
 	block *pad_zeros;
@@ -384,6 +387,7 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
 			gen_7_blks(cipher_blks,log_msg,counter);
 			AES_ECB_8(cipher_blks,sched, mask);
+			// 最终结果的异或
 			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
 			counter += 8;
 			log_msg += 110;
@@ -677,9 +681,10 @@ static int __init benchmarking(void)
 
 
 /*************************************QuickLog*************************************************/	
-	
+	// int test_rounds = 10;
+	int test_rounds = 1;
 	//Quicklog signing a message
-	for(i=0;i<10;i++){
+	for(i=0;i<test_rounds;i++){
 		for(j=0;j<iteration;j++)
 		{	
 			

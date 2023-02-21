@@ -72,6 +72,80 @@ static block_64 current_key1[2];
 EK1 和Ek2 分别为PRESENT和AES
 **/
 
+// /**
+//  * void present_rounds(const uint8_t *plain, const uint8_t *key, const uint8_t rounds, uint8_t *uint8_t *cipher)
+//  * 80-bit secret
+//  * rounds = 31时是全轮次
+//  * PRESENT使用64位标记，AES使用128位
+//  * 分块的时候，按照128分块，每个块分两次送入present进行加密
+// */
+// static block_128 mac_core(const char *log_msg, const int msg_len){
+// 	uint16_t remaining = msg_len;
+
+//     block_64  blk_64[2], blk_cipher_64[2];
+//     block_128 temp_tag_128, blk_128; // temp_tag_128放置分块的中间结果, blk_128放分块结果
+//     uint8_t counter = 1,rounds = 31;
+//     // uint8_t *present_plain; // 8 * 8
+//     uint8_t paylad_len = 14;
+
+//     while(remaining >= paylad_len){
+//         // 前两个字节放位置编码，后面的是日志消息
+//         // 1. 获取14字节内容到blk_128，连接上位置编码
+//         blk_128 = gen_logging_blk((block_128*)(log_msg), (counter));
+//         // 2. 将blk_128 分成两个blk_64
+//         _mm_store_si128((block_128*)blk_64, blk_128);
+//         // 2. 将两个blk_64分别经过两次present编码, 结果放到对应的blk_cipher_64[2]
+//         // void present_rounds(const uint8_t *plain, const uint8_t *key, const uint8_t rounds, uint8_t *uint8_t *cipher)
+//         present_rounds((uint8_t*)&blk_64[0], (uint8_t*)&current_key1[0], rounds, (uint8_t*)&blk_cipher_64[0]);
+//         present_rounds((uint8_t*)&blk_64[1], (uint8_t*)&current_key1[1], rounds, (uint8_t*)&blk_cipher_64[1]);
+//         // 3. 将blk_cipher_64[2]转换为block128, 和中间结果temp_tag_128异或
+//         temp_tag_128 = xor_block(temp_tag_128, ((block_128*)blk_cipher_64)[0]);
+//         counter = counter + 1;
+//         log_msg += 14;
+//         remaining -= 14;
+//     }
+    
+//     unsigned char my_pad[16];
+//     if(remaining){
+//         // pr_info("remaining=%d", remaining);
+//         // 末尾拼接上10*
+//         memcpy(my_pad, log_msg, remaining); // 0,1 放的是位置编码
+//         my_pad[remaining] = '1';
+//         for(int i = remaining+1;i < 16;i++){
+//             my_pad[i] = '0';
+//         }
+//         // pr_info("after padding....");
+//         // for(int i = 0;i < 16;i++){
+//         //     pr_info("i= %d, val = %c ", i, my_pad[i]);
+//         // }
+//         temp_tag_128 = xor_block(temp_tag_128, *(block_128*)my_pad);
+//     }else{
+//         // pr_info("No remaining");
+//     }
+    
+//     ek2(temp_tag_128, current_key2);  // 最后结果经过aes，可以截取前t位
+    
+//     // @todo 更新密钥
+    
+//     return temp_tag_128;
+// }
+
+
+// 块编号的r位编码(counter+i) 连接上块的内容
+#define gen_8_blks(parallel_blk_128,log_msg,counter)                            \
+    do{                                                                    \
+        parallel_blk_128[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); \
+		parallel_blk_128[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); \
+		parallel_blk_128[2]  = gen_logging_blk((block*)(log_msg+28),(counter+3)); \
+		parallel_blk_128[3]  = gen_logging_blk((block*)(log_msg+42),(counter+4)); \
+		parallel_blk_128[4]  = gen_logging_blk((block*)(log_msg+56),(counter+5)); \
+		parallel_blk_128[5]  = gen_logging_blk((block*)(log_msg+70),(counter+6)); \
+		parallel_blk_128[6]  = gen_logging_blk((block*)(log_msg+84),(counter+7)); \
+		parallel_blk_128[7]  = gen_logging_blk((block*)(log_msg+98),(counter+8)); \
+	} while(0)
+
+
+
 /**
  * void present_rounds(const uint8_t *plain, const uint8_t *key, const uint8_t rounds, uint8_t *uint8_t *cipher)
  * 80-bit secret
@@ -84,8 +158,7 @@ static block_128 mac_core(const char *log_msg, const int msg_len){
 
     block_64  blk_64[2], blk_cipher_64[2];
     block_128 temp_tag_128, blk_128; // temp_tag_128放置分块的中间结果, blk_128放分块结果
-    uint8_t counter = 1,rounds = 31;
-    // uint8_t *present_plain; // 8 * 8
+    uint8_t counter = 0,rounds = 31; // rounds 是present需要用的参数
     uint8_t paylad_len = 14;
 
     while(remaining >= paylad_len){
@@ -104,6 +177,20 @@ static block_128 mac_core(const char *log_msg, const int msg_len){
         log_msg += 14;
         remaining -= 14;
     }
+
+    // block_128 parallel_blk_128[8];
+    // // 并行
+    // while (remaining >= (paylad_len * 8))
+    // {
+    //     gen_8_blks(parallel_blk_128, log_msg, counter);
+    //     // 加密
+        
+
+    //     counter += 8;
+	// 	log_msg += 112;
+    //     remaining -= 112;
+    // }
+    
     
     unsigned char my_pad[16];
     if(remaining){
@@ -129,7 +216,6 @@ static block_128 mac_core(const char *log_msg, const int msg_len){
     
     return temp_tag_128;
 }
-
 
 void print_str(char* str,int len)
 {
@@ -197,7 +283,47 @@ unsigned long long median(size_t n, unsigned long long * x) {
 // round_time[i] 是每i条日志消息的耗费时间，round_median[i] 是每i轮的【平均】单条日志加密时间
 static unsigned long long single_msg_time[1048576], round_median[test_rounds];
 
-static int __init benchmarking(void){    
+void test_present_AES_time(void){
+    // uint16_t remaining = msg_len;
+
+    // block_64  blk_64[2], blk_cipher_64[2];
+    // block_128 temp_tag_128, blk_128; // temp_tag_128放置分块的中间结果, blk_128放分块结果
+    // uint8_t paylad_len = 14;
+
+    block_64  blk_64[2], blk_cipher_64[2];
+    block_128 temp_tag_128, blk_128; // temp_tag_128放置分块的中间结果, blk_128放分块结果
+
+    unsigned long long  start_time, end_time;
+    char *str; 
+    str = kmalloc(len, GFP_KERNEL);
+    memset(str,'a',(len));
+    blk_128 = gen_logging_blk((block_128*)(str), (1));
+    _mm_store_si128((block_128*)blk_64, blk_128);
+    int temp_rounds = 100;
+    uint8_t rounds = 31;
+
+    //present
+    msleep(100);
+    for(int i = 0;i < temp_rounds;i++){
+        start_time = ktime_get_ns();
+        present_rounds((uint8_t*)&blk_64[0], (uint8_t*)&current_key1[0], rounds, (uint8_t*)&blk_cipher_64[0]);
+        present_rounds((uint8_t*)&blk_64[1], (uint8_t*)&current_key1[1], rounds, (uint8_t*)&blk_cipher_64[1]);
+        end_time = ktime_get_ns();
+    }
+    pr_info("-[LightMAC PRESENT]-: time = %llu ns\n", (end_time - start_time));
+
+    // AES
+    temp_tag_128 = xor_block(temp_tag_128, ((block_128*)blk_cipher_64)[0]);
+    msleep(100);
+    for(int i = 0;i < temp_rounds;i++){
+        start_time = ktime_get_ns();
+        ek2(temp_tag_128, current_key2);  // 最后结果经过aes，可以截取前t位
+        end_time = ktime_get_ns();
+    }
+    // pr_info("-[LightMAC]-: median time = %llu ns, standard deviation = %llu\n", mean, q_sd);
+    pr_info("-[LightMAC AES]-: time = %llu ns\n", (end_time - start_time));
+}
+static int __init benchmarking_lightMAC(void){    
     // char *msg1,*msg2;
     // int len1 = 28,len2 = 24; // 一个块14 个字节,msg1刚好分成两个块, msg2最后一个块需要填充10*
     // msg1 = kmalloc(len1, GFP_KERNEL);
@@ -214,13 +340,14 @@ static int __init benchmarking(void){
     // pr_info("ret2:");
     // print_block128(ret2);
 
-
+    test_present_AES_time();
+    return 0;
 
 
     crypto_int();
 
     char *str; 
-    int len;
+    // int len;
     str = kmalloc(len, GFP_KERNEL);
     memset(str,'a',(len));
     msleep(100);
@@ -262,16 +389,16 @@ static int __init benchmarking(void){
 
     }
     q_sd = int_sqrt(sd_sum / test_rounds); // 均方差
-
+    pr_info("-[LightMAC]-: median time = %llu ns, standard deviation = %llu\n", mean, q_sd);
     return 0;
 }
 
-static void __exit quickmod_exit(void)
+static void __exit lightMAC_exit(void)
 {
 	pr_info("Module removed:%s \n", __func__);
 }
 
-module_init(benchmarking);
-module_exit(quickmod_exit);
+module_init(benchmarking_lightMAC);
+module_exit(lightMAC_exit);
 
 MODULE_LICENSE("GPL");
