@@ -32,7 +32,7 @@ static AES_KEY const_aeskey;
 static block signing_pair[16];
 static block s_0;/* initial State */
 static int  len;
-static unsigned long long my_time[320000], quick_med[10];
+static unsigned long long my_time[320000], quick_med[20];
 
 /********************************************************************/
 // AES Key Expansion
