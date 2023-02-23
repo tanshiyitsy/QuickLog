@@ -39,21 +39,10 @@ module_param(len,int,S_IRUGO);
 typedef __m128i block;
 typedef struct {block rd_key[11]; } AES_KEY;
 
-// aeskey是生成固定密钥时提供的user_key
-// const_aeskey是生成的固定密钥，一旦生成，后续不变
 const static unsigned char aeskey[16] = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p'};
 static AES_KEY const_aeskey;
 static block current_key, current_state, q2_tag;
 static unsigned long long my_time[1048576];
-
-
-/**
- * 我定义的变量
- * light_current_key = user_key
-*/
-static block light_current_key, light_current_state;
-
-
 
 /* Some helper functions */
 #define rnds 10 //AES rounds
@@ -66,18 +55,6 @@ static block light_current_key, light_current_state;
 // Dead Store Elimination (Still) Considered Harmful, USENIX 2017
 // https://compsec.sysnet.ucsd.edu/secure_memzero.h
 //
-/**
- * __m128i _mm_aeskeygenassist_si128(__m128i ckey, const int rcon);   https://blog.csdn.net/fengbingchun/article/details/22323607
- * 根据输入的m128i生成一个 m128i的轮密钥，第二个参数必须是一个编译时常数
- * AES加密要求10轮迭代，每一轮需要一个不同的128位的轮密钥，这个指令帮忙生成所有的轮密钥
- * 
- * _mm_shuffle_ps(a: __m128, b: __m128, const MASK: i32) -> __m128
- * 使用MASK对a和b中的压缩单精度（32位）浮点元素进行解算。结果的下半部分取a的值，上半部分取b的值。掩码被拆分为2个控制位，每个控制位用于从输入中索引元素。
- * 
- * _mm_castps_si128(a: __m128) -> __m128i
- * 将〔4 x float〕的128位浮点向量转换为128位整数向量。
-*/
-
 #define EXPAND_ASSIST(v1,v2,v3,v4,shuff_const,aes_const)                    \
   do{                                                                       \
     v2 = _mm_aeskeygenassist_si128(v4,aes_const);                           \
@@ -293,131 +270,6 @@ void AES_128_Key_Expansion(const unsigned char *userkey, void *key)
 		cipher_blks[7] =_mm_aesenclast_si128(cipher_blks[7], sched[10]); \
 	}while (0)
 
-/**
- * 我的宏定义
-*/
-#define light_gen_8_blks(cipher_blks,log_msg,counter)                            \
-    do{                                                                    \
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); \
-		cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); \
-		cipher_blks[2]  = gen_logging_blk((block*)(log_msg+28),(counter+3)); \
-		cipher_blks[3]  = gen_logging_blk((block*)(log_msg+42),(counter+4)); \
-		cipher_blks[4]  = gen_logging_blk((block*)(log_msg+56),(counter+5)); \
-		cipher_blks[5]  = gen_logging_blk((block*)(log_msg+70),(counter+6)); \
-		cipher_blks[6]  = gen_logging_blk((block*)(log_msg+84),(counter+7)); \
-		cipher_blks[7]  = gen_logging_blk((block*)(log_msg+98),(counter+8)); \
-	} while(0)
-
-// _mm_aesenclast_si128 是AES的最后一轮加密
-// enc里使用的_mm_aesenc_si128(cipher_blks[6], key)是AES中的标准轮
-#define LIGHT_AES_ECB_8(cipher_blks, round_keys)   \
-	do{                                        	   \
-		enc_8(cipher_blks, round_keys[1]);              \
-		enc_8(cipher_blks, round_keys[2]);              \
-		enc_8(cipher_blks, round_keys[3]);              \
-		enc_8(cipher_blks, round_keys[4]);              \
-		enc_8(cipher_blks, round_keys[5]);              \
-		enc_8(cipher_blks, round_keys[6]);              \
-		enc_8(cipher_blks, round_keys[7]);              \
-		enc_8(cipher_blks, round_keys[8]);              \
-		enc_8(cipher_blks, round_keys[9]);              \
-		cipher_blks[0] =_mm_aesenclast_si128(cipher_blks[0], round_keys[10]); \
-		cipher_blks[1] =_mm_aesenclast_si128(cipher_blks[1], round_keys[10]); \
-		cipher_blks[2] =_mm_aesenclast_si128(cipher_blks[2], round_keys[10]); \
-		cipher_blks[3] =_mm_aesenclast_si128(cipher_blks[3], round_keys[10]); \
-		cipher_blks[4] =_mm_aesenclast_si128(cipher_blks[4], round_keys[10]); \
-		cipher_blks[5] =_mm_aesenclast_si128(cipher_blks[5], round_keys[10]); \
-		cipher_blks[6] =_mm_aesenclast_si128(cipher_blks[6], round_keys[10]); \
-		cipher_blks[7] =_mm_aesenclast_si128(cipher_blks[7], round_keys[10]); \
-	}while (0)
-
-#define light_gen_4_blks(cipher_blks,log_msg,counter)                            \
-    do{                                                                    \
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); \
-		cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); \
-		cipher_blks[2]  = gen_logging_blk((block*)(log_msg+28),(counter+3)); \
-		cipher_blks[3]  = gen_logging_blk((block*)(log_msg+42),(counter+4)); \
-	} while(0)
-
-#define LIGHT_AES_ECB_4(cipher_blks, sched)   \
-	do{                                        	   \
-		enc_4(cipher_blks, sched[1]);              \
-		enc_4(cipher_blks, sched[2]);              \
-		enc_4(cipher_blks, sched[3]);              \
-		enc_4(cipher_blks, sched[4]);              \
-		enc_4(cipher_blks, sched[5]);              \
-		enc_4(cipher_blks, sched[6]);              \
-		enc_4(cipher_blks, sched[7]);              \
-		enc_4(cipher_blks, sched[8]);              \
-		enc_4(cipher_blks, sched[9]);              \
-		cipher_blks[0] =_mm_aesenclast_si128(cipher_blks[0], sched[10]); \
-		cipher_blks[1] =_mm_aesenclast_si128(cipher_blks[1], sched[10]); \
-		cipher_blks[2] =_mm_aesenclast_si128(cipher_blks[2], sched[10]); \
-		cipher_blks[3] =_mm_aesenclast_si128(cipher_blks[3], sched[10]); \
-	}while (0)
-
-#define light_gen_2_blks(cipher_blks,log_msg,counter)                            \
-    do{                                                                    \
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); \
-		cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); \
-	} while(0)
-#define LIGHT_AES_ECB_2(cipher_blks, sched)   \
-	do{     \
-		enc_2(cipher_blks, sched[1]);              \
-		enc_2(cipher_blks, sched[2]);              \
-		enc_2(cipher_blks, sched[3]);              \
-		enc_2(cipher_blks, sched[4]);              \
-		enc_2(cipher_blks, sched[5]);              \
-		enc_2(cipher_blks, sched[6]);              \
-		enc_2(cipher_blks, sched[7]);              \
-		enc_2(cipher_blks, sched[8]);              \
-		enc_2(cipher_blks, sched[9]);              \
-		cipher_blks[0] =_mm_aesenclast_si128(cipher_blks[0], sched[10]); \
-		cipher_blks[1] =_mm_aesenclast_si128(cipher_blks[1], sched[10]); \
-	}while (0)
-
-
-
-
-#define AES_128_key_exp(k, rcon) aes_128_key_expansion(k, _mm_aeskeygenassist_si128(k, rcon))
-
-static __m128i aes_128_key_expansion(__m128i key, __m128i keygened){
-    keygened = _mm_shuffle_epi32(keygened, _MM_SHUFFLE(3,3,3,3));
-    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
-    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
-    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
-    return _mm_xor_si128(key, keygened);
-}
-
-//public API uint8_t *enc_key --> 
-static void aes128_load_key_enc_only(const __m128i* enc_key, __m128i *key_schedule){
-    // key_schedule[0] = _mm_loadu_si128((const __m128i*) enc_key);
-	key_schedule[0] = _mm_loadu_si128(enc_key);
-    key_schedule[1]  = AES_128_key_exp(key_schedule[0], 0x01);
-    key_schedule[2]  = AES_128_key_exp(key_schedule[1], 0x02);
-    key_schedule[3]  = AES_128_key_exp(key_schedule[2], 0x04);
-    key_schedule[4]  = AES_128_key_exp(key_schedule[3], 0x08);
-    key_schedule[5]  = AES_128_key_exp(key_schedule[4], 0x10);
-    key_schedule[6]  = AES_128_key_exp(key_schedule[5], 0x20);
-    key_schedule[7]  = AES_128_key_exp(key_schedule[6], 0x40);
-    key_schedule[8]  = AES_128_key_exp(key_schedule[7], 0x80);
-    key_schedule[9]  = AES_128_key_exp(key_schedule[8], 0x1B);
-    key_schedule[10] = AES_128_key_exp(key_schedule[9], 0x36);
-}
-
-#define light_aes_single(cipher_blk, sched)                               \
-	do{                                                              \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[1]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[2]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[3]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[4]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[5]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[6]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[7]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[8]); \
-		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[9]); \
-		cipher_blk =_mm_aesenclast_si128(cipher_blk, sched[10]);\
-	} while(0)
 
 //end of marcos---------------------------------------------
 
@@ -488,33 +340,6 @@ static void crypto_int(void)
 
 	kernel_fpu_end();
 }
-void crypto_int_all(void)
-{
-	block s_0, mask;
-	block init_pair[2];
-	block * sched;
-	get_random_bytes(&s_0, sizeof(block));/*initial State */
-	
-	kernel_fpu_begin();	
-	
-	// 初始化QuickLog需要的密钥
-	AES_128_Key_Expansion(aeskey,&const_aeskey); //inital aes round keys
-	init_pair[0] = zero_block();/*0 for updatting state*/
-	init_pair[1] = _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000);/*1 for updatting key*/
-	sched = ((block *)(const_aeskey.rd_key)); 
-	mask =xor_block(s_0, sched[0]);
-	init_pair[0] = xor_block(init_pair[0], mask);
-	init_pair[1] = xor_block(init_pair[1], mask);
-	AES_ECB_2(init_pair, sched);
-	current_state = xor_block(init_pair[0], s_0);
-	current_key = xor_block(init_pair[1], s_0);
-
-	// 初始化LightMAC需要的密钥
-	get_random_bytes(&light_current_key, sizeof(block));
-	get_random_bytes(&light_current_state, sizeof(block));
-
-	kernel_fpu_end();
-}
 
 
 /**  
@@ -526,6 +351,84 @@ void crypto_int_all(void)
 * Output: T(64-byte tag)
 **/ 
 // Even Mansour 来更新密钥
+
+
+// #define aes_single(cipher_blks, sched)                               \
+// 	do{                                                              \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[1]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[2]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[3]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[4]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[5]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[6]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[7]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[8]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[9]); \
+// 		cipher_blks[0] =_mm_aesenclast_si128(cipher_blks[0], sched[10]);\
+// 	} while(0)
+#define AES_128_key_exp(k, rcon) aes_128_key_expansion(k, _mm_aeskeygenassist_si128(k, rcon))
+
+static __m128i aes_128_key_expansion(__m128i key, __m128i keygened){
+    keygened = _mm_shuffle_epi32(keygened, _MM_SHUFFLE(3,3,3,3));
+    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
+    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
+    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
+    return _mm_xor_si128(key, keygened);
+}
+
+//public API uint8_t *enc_key --> 
+static void aes128_load_key_enc_only(const __m128i* enc_key, __m128i *key_schedule){
+    // key_schedule[0] = _mm_loadu_si128((const __m128i*) enc_key);
+	key_schedule[0] = _mm_loadu_si128(enc_key);
+    key_schedule[1]  = AES_128_key_exp(key_schedule[0], 0x01);
+    key_schedule[2]  = AES_128_key_exp(key_schedule[1], 0x02);
+    key_schedule[3]  = AES_128_key_exp(key_schedule[2], 0x04);
+    key_schedule[4]  = AES_128_key_exp(key_schedule[3], 0x08);
+    key_schedule[5]  = AES_128_key_exp(key_schedule[4], 0x10);
+    key_schedule[6]  = AES_128_key_exp(key_schedule[5], 0x20);
+    key_schedule[7]  = AES_128_key_exp(key_schedule[6], 0x40);
+    key_schedule[8]  = AES_128_key_exp(key_schedule[7], 0x80);
+    key_schedule[9]  = AES_128_key_exp(key_schedule[8], 0x1B);
+    key_schedule[10] = AES_128_key_exp(key_schedule[9], 0x36);
+}
+
+#define test_aes_single(cipher_blk, sched)                               \
+	do{                                                              \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[1]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[2]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[3]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[4]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[5]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[6]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[7]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[8]); \
+		cipher_blk = _mm_aesenc_si128(cipher_blk, sched[9]); \
+		cipher_blk =_mm_aesenclast_si128(cipher_blk, sched[10]);\
+	} while(0)
+block cipher_blks[100];
+int blk_cnt = 0;
+while(remaining >= 16){ // 不考虑位置编码的占比，一个块长度为 16bytes * 8bits
+	cipher_blks[blk_cnt++] = _mm_loadu_si128(log_msg);
+	log_msg += 16;
+	remaining -= 16;
+}
+// cipher_blks
+// 简化的AES
+register block * const_zero_sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
+for(int i = 0;i < blk_cnt;i++){
+	test_aes_single(cipher_blks[i], const_zero_sched);
+}
+
+// 标准的AES
+// uint8_t enc_key[]    = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
+__m128i enc_key = 
+__m128i rounds_keys[11]; // 轮密钥
+aes128_load_key_enc_only();
+for(int i = 0;i < blk_cnt;i++){
+	test_aes_single(cipher_blks[i], const_zero_sched);
+}
+
+
 static __u64 mac_core( const char *log_msg, const int msg_len)
 {
 	block mask, cipher_blks[8], tag_blks[3];
@@ -610,7 +513,7 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 		current_state = xor_block(cipher_blks[1], current_state);
 	}else{
 		// 直接更新state && key
-		//pr_info("no remaining!");
+		//pr_info("no remaining!\n");
 		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
 		cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
 		AES_ECB_2(cipher_blks, sched);
@@ -623,92 +526,105 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	return (out_tmp[0]);
 }
 
+
+
+
 /**  
-* MAC, signing a log message and updating the signing-key & state
-* Input @log_msg: a log data,  
-        @msg_len: the length of the log data 
+* QuickLog2: updating the tag, signing-key & state
+* Input @log_msg: a log data, @msg_len: the length of the data
 * Computing block format: a block(16 bytes) contains "<i>||M_i",  
 *                         2 bytes counter(<i>) and 14 bytes log data(M_i)
-* Output: T(64-byte tag)
-**/ 
-// Even Mansour 来更新密钥
-static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_len)
+* 
+**/
+static void mac_core_2(const char *log_msg, const int msg_len)
 {
-	uint16_t remaining = (uint16_t)msg_len;
-	block cipher_blks[8]; // 存放待加密的日志原文，最多可8路并行加密
-	block tag_blks[3]; // 最终结果存放
-	tag_blks[2] = xor_block(tag_blks[2], tag_blks[2]); //初始化为0
-	uint8_t counter = 0; // 分组块的编码
-	uint8_t paylad_len = 14; // 块长度为16 * 8 = 128， 前两个字节放位置编码，后面的是日志消息
+	block mask, cipher_blks[8], tag_blks[3];
+	unsigned char my_pad[16];
 
+	register block * sched = ((block *)(const_aeskey.rd_key)); 
+	register block * aes_blks = cipher_blks;
+	block *pad_zeros;
+	uint16_t remaining, counter, *pad_header;
+	
+	remaining = (uint16_t)msg_len;
+	counter =0;
+	pad_header = ((uint16_t*)(my_pad));	
+	pad_zeros = ((block *)(my_pad));
 
-	block rounds_keys[11]; // 轮密钥
-	aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
+	
+	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
+	tag_blks[2] = _mm_loadu_si128(&current_key);
 
-	while(remaining >= (paylad_len * 8)){
-		// 8 路并行
-		light_gen_8_blks(cipher_blks, log_msg, counter);
-		LIGHT_AES_ECB_8(cipher_blks, rounds_keys);
-		tag_8_xor(tag_blks,cipher_blks); //cipher_blks 8个块的结果异或，最终结果放在tag_blks[2], 包含历史结果的更新
-
-		log_msg += paylad_len * 8;
-		remaining -= paylad_len * 8;
-		counter = counter + 8;
-	}
-	if(remaining >= (paylad_len * 4)){
-		// 剩下的内容可以四路并行
-		light_gen_4_blks(cipher_blks, log_msg, counter);
-		LIGHT_AES_ECB_4(cipher_blks, rounds_keys);
+	if(remaining>=112)//start 8 blocks parallel computing 
+	{
+		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); 
+		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0);
+		gen_7_blks(cipher_blks,log_msg,counter);
+		AES_ECB_8(cipher_blks,sched, mask);
+		tag_8_xor(tag_blks,cipher_blks);
+		counter +=8;
+		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	
+		remaining -= 112;
+		while(remaining >= 112){	
+			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
+			gen_7_blks(cipher_blks,log_msg,counter);
+			AES_ECB_8(cipher_blks,sched, mask);
+			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
+			counter += 8;
+			log_msg += 110;
+			remaining -= 112;
+		}
+	}//end of nblks
+	
+	if(remaining >=56){//4-block, 4*14=56 bytes log data
+		cmpt_4_blks(aes_blks,counter, log_msg, sched, mask);
 		tag_blks[0] = xor_block( xor_block(cipher_blks[0], cipher_blks[1]), xor_block(cipher_blks[2], cipher_blks[3]));  
 		tag_blks[2] = xor_block(tag_blks[2], tag_blks[0]);
-		log_msg += paylad_len * 4;
-		remaining -= paylad_len * 4;
-		counter = counter + 4;
+		remaining -= 56;
+		counter +=4;
+		log_msg +=54;/*56-byte computed, apply 54-byte, leaving 2-byte overwrote by counter*/
 	}
-	if (remaining >= 28) {
-		// 剩下的内容可以两路并行
-		light_gen_2_blks(cipher_blks, log_msg, counter);
-		LIGHT_AES_ECB_2(cipher_blks, rounds_keys);
+	if (remaining >= 28) {//2-block, 2*14=28 bytes log data
+		cmpt_2_blks(aes_blks, counter, log_msg, sched, mask);
+		//AES_ECB_2(aes_blks,sched);
 		tag_blks[2] = xor_block(xor_block(cipher_blks[0], cipher_blks[1]), tag_blks[2]); 
-		log_msg += paylad_len * 2;
-		remaining -= paylad_len * 2;
-		counter = counter + 2;
+		remaining -= 28;
+		counter +=2;
+		log_msg +=26;/*28-byte computed, apply 26-byte, leaving 2-byte overwrote by counter*/
 	}
-
-	if (remaining >= 14) {
-		// 剩下的至少可以构成1个块
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1));
-		light_aes_single(cipher_blks[0], rounds_keys);
+	if (remaining >= 14) {//1-block 14 bytes log data
+		cmpt_a_blk(&aes_blks[0],counter, log_msg, sched, mask);
 		tag_blks[2] = xor_block(tag_blks[2], cipher_blks[0]);
-		remaining -= paylad_len;
+		remaining -= 14;
 		counter +=1;
-		log_msg +=paylad_len;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
+		log_msg +=12;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
 	}
 
-unsigned char my_pad[16];
-#if 1
 	if (remaining){//last block + generating new key
-		// 剩下的不足以构成一个块，用10*补足
-		memcpy(my_pad, log_msg, remaining); // 0,1 放的是位置编码
-		my_pad[remaining] = '1';
-		for(int i = remaining+1;i < 16;i++){
-            my_pad[i] = '0';
-        }
-		tag_blks[2] = xor_block(tag_blks[2], *(block*)my_pad);
+		if (counter)  log_msg +=2;
+		counter += (14-remaining);
+		* pad_zeros = zero_block();
+		* pad_header = counter;
+		memcpy(&my_pad[2], log_msg, remaining);
+		cipher_blks[0] = xor_block( mask, *(block*)my_pad);
+		// cipher_blks[1] = xor_block(current_state, sched[0]); /*0 for updatting state*/
+		// cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
+		AES_ECB_3(cipher_blks, sched);
+		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]);
+		current_key = xor_block(cipher_blks[2], current_state);
+		current_state = xor_block(cipher_blks[1], current_state);
+		q2_tag = xor_block(tag_blks[2], q2_tag );	
 	}else{
-		// 直接更新state && key
-		//pr_info("no remaining!");
+		//pr_info("no remaining!\n");
+		// cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
+		// cipher_blks[0] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
+		AES_ECB_2(cipher_blks, sched);
+		current_key = xor_block(cipher_blks[1], current_state);
+		current_state = xor_block(cipher_blks[0], current_state);
+		q2_tag = xor_block(tag_blks[2], q2_tag );	
 	}
-#endif
-	__u64 out_tmp[2];
-	// 更新密钥
-	cipher_blks[0] = xor_block(light_current_state, _mm_setr_epi32(0x0000, 0x0000, 0x0000, 0x0000));/*0 for updatting state*/
-	cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key2*/
-    light_current_key = xor_block(cipher_blks[1], light_current_state);
-	light_current_state = xor_block(cipher_blks[0], light_current_state);
 
-	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
-	return (out_tmp[0]);
+
 }
 
 #undef gen_7_blks
@@ -778,12 +694,16 @@ static u64 sign_event(char *log_msg, siphash_key_t first_key,size_t key_len)
 
 //---------------------------------------------------------------------------------------
 //endregion
-void print_block(block blk)
+void print_block(block var)
 {
-    uint16_t *val = (uint16_t*) &blk; 
-    pr_info("Numerical: %i %i %i %i %i %i %i %i ", 
-      val[0], val[1], val[2], val[3], val[4], val[5], 
-      val[6], val[7]); 
+	uint8_t *val = (uint8_t*)&var;
+
+    // uint16_t *val = (uint16_t*) &var;//can also use uint32_t instead of 16_t
+	pr_info("Numerical:");
+	for(int i = 0;i < 16;i++){
+		pr_info("i= %d, val = %d ", i, val[i]);
+	}
+	pr_info("\n");
 }
 void print_str(char* str,int len)
 {
@@ -794,153 +714,40 @@ void print_str(char* str,int len)
 	for(int i = 0;i < len;i++){
 		pr_info("i= %d, val = %d ", i, val[i]);
 	}
-	pr_info("");
+	pr_info("\n");
 }
 
 
-
-/**
- * 单次简化后的AES和传统AES效率的对比
-*/
-void test_aes_traditional_simplified(void){
-    // 初始化日志
-	char *str; 
-	int len = 10240;
-	str = kmalloc(len, GFP_KERNEL);
-	memset(str,'a',(len));
-
-    char* log_msg = str;
-    block cipher_blks[len/16];
-    int blk_cnt = 0; // 先测量加密10个块的数据
-    int remaining = len;
-    while(remaining >= 16){ // 不考虑位置编码的占比，一个块长度为 16bytes * 8bits
-        cipher_blks[blk_cnt++] = _mm_loadu_si128((const __m128i*)log_msg);
-        log_msg += 16;
-        remaining -= 16;
-    }
-    unsigned long long  start_time, end_time, simplified_time = 0, traditional_time = 0; 
-    // 1151749284016177
-    unsigned long long test_rounds = 100;
-    // 简化的AES
-    register block * const_zero_rounds_keys = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
-    msleep(100);
-    start_time = ktime_get_ns();
-    for(unsigned long long i = 0;i < test_rounds;i++){
-        light_aes_single(cipher_blks[i%blk_cnt], const_zero_rounds_keys);
-        // msleep(100);
-    }
-    end_time = ktime_get_ns();
-    simplified_time += end_time - start_time;
-    simplified_time /= test_rounds;
-    pr_info("-[ simplified AES]-: time =%llu ns, start =%llu ns, end =%llu ns\n", simplified_time, start_time, end_time);
-
-    // 标准的AES
-    block user_key;
-    block rounds_keys[11]; // 轮密钥
-    get_random_bytes(&user_key, sizeof(block));
-    // aes128_load_key_enc_only(&user_key, rounds_keys); // 根据user_key生成11个轮密钥
-    msleep(100);
-    start_time = ktime_get_ns();
-    for(unsigned long long i = 0;i < test_rounds;i++){
-        aes128_load_key_enc_only(&user_key, rounds_keys); // 根据user_key生成11个轮密钥
-        light_aes_single(cipher_blks[i%blk_cnt], rounds_keys);
-        // msleep(100);
-    }
-    end_time = ktime_get_ns();
-    traditional_time += end_time - start_time;
-
-    traditional_time /= test_rounds;
-    pr_info("-[ traditional AES]-: time =%llu ns, start =%llu ns, end =%llu\n", traditional_time, start_time, end_time);
-}
-
-
-void temp_aes_traditional(void){
-    // 初始化日志
+// #define aes_single(cipher_blks, sched)                               \
+// 	do{                                                              \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[1]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[2]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[3]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[4]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[5]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[6]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[7]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[8]); \
+// 		cipher_blks[0] = _mm_aesenc_si128(cipher_blks[0], sched[9]); \
+// 		cipher_blks[0] =_mm_aesenclast_si128(cipher_blks[0], sched[10]);\
+// 	} while(0)
+void test_single_aes_traditional_aes(){
 	char *str; 
 	str = kmalloc(10240, GFP_KERNEL);
 	memset(str,'a',(8192));
-
-    char* log_msg = str;
-    block cipher_blks[100];
-    int blk_cnt = 0;
-    int remaining = 1024;
-    while(remaining >= 16){ // 不考虑位置编码的占比，一个块长度为 16bytes * 8bits
-        cipher_blks[blk_cnt++] = _mm_loadu_si128((const __m128i*)log_msg);
-        log_msg += 16;
-        remaining -= 16;
-    }
-    
-    // 标准的AES
-    block user_key;
-    get_random_bytes(&user_key, sizeof(block));
-    pr_info("get_random_bytes results :");
-    print_block(user_key);
-    for(int i = 0;i < 10;i++){
-        pr_info("====================origin block content i:%d============== ", i);
-        print_block(cipher_blks[i]);
-        pr_info("====================origin block content i:%d============== ", i);
-        // get_random_bytes(&user_key, sizeof(block));
-        // pr_info("get_random_bytes results :");
-        // print_block(user_key);
-        block rounds_keys[11]; // 轮密钥
-        aes128_load_key_enc_only(&user_key, rounds_keys); // 根据user_key生成11个轮密钥
-        for(int j = 0;j < 11;j++){
-            pr_info("round key j:%d ", j);
-            print_block(rounds_keys[j]);
-        }
-        light_aes_single(cipher_blks[i], rounds_keys);
-        pr_info("====================aes block result i:%d============== ", i);
-        print_block(cipher_blks[i]);
-        pr_info("====================aes block result i:%d============== ", i);
-    }
-}
-
-/**
- * QuickLog使用简化后的AES，同使用LightMAC架构+传统AES签名日志消息的效率对比
-*/
-void sign_benchmarking_quicklog_lightmac(void){
-	// 初始化密钥
-	crypto_int_all();
-	// 初始化日志内容
-	int len = 1024;
-	char *str; 
-	str = kmalloc(len, GFP_KERNEL);
-	memset(str,'a',(len));
-
-	int test_rounds = 10000;
-	unsigned long long  start_time, end_time, quicklog_time = 0, lightmac_time = 0; 
-	__u64  sign_tag;
-	// QuickLog
-	msleep(100);
-	start_time = ktime_get_ns();
-	for(int i = 0;i < test_rounds;i++){
-		kernel_fpu_begin();
-		sign_tag = mac_core(str, len);
-		kernel_fpu_end();
-	}
-	end_time = ktime_get_ns();
-	quicklog_time = end_time - start_time;
-	quicklog_time /= test_rounds;
-	pr_info("-[ quicklog_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", quicklog_time, start_time, end_time);
+	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
 
 
-	msleep(100);
-	start_time = ktime_get_ns();
-	for(int i = 0;i < test_rounds;i++){
-		kernel_fpu_begin();
-		sign_tag = light_mac_with_tradtional_mac(str, len);
-		kernel_fpu_end();
-		// msleep(100);
-	}
-	end_time = ktime_get_ns();
-	lightmac_time = end_time - start_time;
-	lightmac_time /= test_rounds;
-	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
+	// 简化后的AES
+	// 传统AES
+
+
+	
+
 }
 static int __init benchmarking(void)
 {
-	sign_benchmarking_quicklog_lightmac();
-    return 0;
+	
 	int i, j;
 	char *str; 
 	unsigned long long  start_time, end_time, appd_med, kenny_med[10], quick_med[10], quick_2_med[10];
@@ -949,13 +756,33 @@ static int __init benchmarking(void)
 	size_t key_len;
 	siphash_key_t first_key;
 	struct audit_buffer *ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_SYSCALL);
+    //audit_log_format(ab, "arch=c000003e syscall=9 success=yes exit=139641477644288 a0=7f00d0abc000 a1=2000 a2=3 a3=812 items=0 ppid=1234 pid=5776 auid=1000 uid=1000 gid=1000 euid=0 suid=0 fsuid=0 egid=1000 sgid=1000 fsgid=1000 tty=pts0 ses=1 comm=\"sudo\" exe=\"/usr/bin/sudo\" key=(null)");
+
 
 	key_len = sizeof(first_key);
-	int len = 8192;
-	str = kmalloc(len, GFP_KERNEL);
-    memset(str,'a',(len));
+	str = kmalloc(10240, GFP_KERNEL);
+    memset(str,'a',(8192));
 	
-	pr_info("_______Starting: log size = %dB______\n", len);
+	/**
+	 * 
+	 * 
+	 
+	 char *msg;
+	msg = kmalloc(16, GFP_KERNEL);
+	memset(msg,'a',(14)); //16 * 8 = 128 = size(block)
+	int counter = 2;
+	pr_info("msg=%s\n", msg);
+
+	
+	print_str(msg, 16);
+	block blk = gen_logging_blk((block*)msg, counter); 
+	print_block(blk);
+	
+
+	return 8;
+	*/
+	
+	pr_info("\n_______Starting: log size = %dB______\n", len);
 	crypto_int();
 
 
@@ -967,46 +794,257 @@ static int __init benchmarking(void)
 	msleep(100);
 	//Quicklog signing a message
 	for(i=0;i<test_rounds;i++){
+		start_time = ktime_get_ns();
 		for(j=0;j<iteration;j++)
 		{	
-			start_time = ktime_get_ns();
+			
+			// start_time = ktime_get_ns();
 			kernel_fpu_begin();
 			quick_tag = mac_core(str, len);
+			// quick_tag = mac_core_without_update_key(str, len);
 			kernel_fpu_end();
-			end_time = ktime_get_ns();
+			// end_time = ktime_get_ns();
 			// my_time 的长度 1048576
-			my_time[j] = end_time - start_time;
+			// my_time[j] = end_time - start_time;
 			
 		}
-		quick_med[i] =  median(iteration,  my_time);
+		end_time = ktime_get_ns();
+		quick_med[i] += end_time - start_time;
+		// quick_med[i] =  median(iteration,  my_time);
 		msleep(100);
 	}
 	
-	sum = 0;
+	sum =0;
 	for(i=0;i<test_rounds;i++) sum +=quick_med[i];
 
 	mean = (sum/test_rounds);
 	pr_info("-[QuickLog Sign]-: mean time =%llu ns\n", mean);
 	return 0;
 	sd_sum =0;
-	for(i=0;i<test_rounds;i++) sd_sum +=(quick_med[i]-mean)*(quick_med[i]-mean);
+	for(i=0;i<10;i++) sd_sum +=(quick_med[i]-mean)*(quick_med[i]-mean);
 	q_sd = sd_sum/10;
 	q_sd = int_sqrt(q_sd);
 
 	msleep(100);
 
-	// pr_info("-[QuickLog Sign]-: median time =%llu ns, standard deviation = %llu", quick_med[0], q_sd);
+	// pr_info("-[QuickLog Sign]-: median time =%llu ns, standard deviation = %llu\n", quick_med[0], q_sd);
 	// return 0;
+	
+/*************************************QuickLog2*************************************************/
+	for(i=0;i<10;i++){
+		for(j=0;j<iteration;j++)
+		{	
+
+			start_time = ktime_get_ns();
+
+			kernel_fpu_begin();
+			mac_core_2(str, len);
+			kernel_fpu_end();
+			
+			end_time = ktime_get_ns();
+			
+			my_time[j] = end_time - start_time;
+			
+		}
+		
+		quick_2_med[i] =  median(iteration,  my_time);  
+
+		msleep(100);
+	}
+
+
+	sum =0;
+	for(i=0;i<10;i++) sum +=quick_2_med[i];
+	mean = (sum/10);
+	sd_sum =0;
+	for(i=0;i<10;i++) sd_sum +=(quick_2_med[i]-mean)*(quick_2_med[i]-mean);
+	q2_sd = sd_sum/10;
+	q2_sd = int_sqrt(q2_sd);
+
+	
+
+	msleep(100);
+/*************************************Kennylogging *********************************/
+	
+	//Kennylogging signing a message
+	for(i=0;i<10;i++){
+	for(j=0;j<iteration;j++)
+		{
+			get_random_bytes(&first_key, key_len);
+
+			start_time = ktime_get_ns();
+			kenny_tag = sign_event(str, first_key, key_len);
+			end_time = ktime_get_ns();
+			my_time[j] = end_time - start_time;
+			
+		}
+		kenny_med[i] =  median(iteration,  my_time);  
+
+		msleep(100);
+	}
+
+	sum =0;
+	for(i=0;i<10;i++) sum +=kenny_med[i];
+	mean = (sum/10);
+	sd_sum =0;
+	for(i=0;i<10;i++) sd_sum +=(kenny_med[i]-mean)*(kenny_med[i]-mean);
+	k_sd = sd_sum/10;
+	k_sd = int_sqrt(k_sd);
+
+
+   //Erasing Kennylogging's current key
+
+	for(j=0;j<iteration;j++)
+	{
+		get_random_bytes(&first_key, key_len);
+
+		start_time = ktime_get_ns();
+		erase_from_memory(&first_key, key_len);
+		end_time = ktime_get_ns();
+		my_time[j] = end_time - start_time;
+		
+	}
+	kenny_med[0] +=  median(iteration,  my_time);  
+
+	msleep(100);
+
+
+	// Appending the tag to the log message	
+	audit_log_format(ab, "type=SOCKADDR msg=audit(1650461786.949:105297428)  : saddr=0100");
+	
+	for(j=0;j<1000;j++)
+	{	
+
+		start_time = ktime_get_ns();
+
+		audit_log_format(ab, " p=%llx", kenny_tag);
+		
+		end_time = ktime_get_ns();
+		
+		my_time[j] = end_time - start_time;
+		
+	}
+	appd_med = median(1000,  my_time);
+	kenny_med[0] +=  appd_med;  
+	quick_med[0] +=  appd_med;
+
+
+	pr_info("-[QuickLog Sign]-: median time =%llu ns, standard deviation = %llu\n", quick_med[0], q_sd);
+	pr_info("--[QuickLog2 Sign]--: median time =%llu ns, standard deviation = %llu\n", quick_2_med[0], q2_sd);
+	pr_info("(KennyLoggings Sign): median time =%llu ns, standard deviation = %llu\n", kenny_med[0], k_sd);
+
+	pr_info("\n-----------------------------------------------------------\n");
+	msleep(20000);
 	return 0;
 }
 
 
+static __u64 mac_core_without_update_key( const char *log_msg, const int msg_len)
+{
+	block mask, cipher_blks[8], tag_blks[3];
+	unsigned char my_pad[16];
+	__u64 out_tmp[2];
+	// sched是固定的AES的key，长度为11个block
+	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
+	register block * aes_blks = cipher_blks;
+	block *pad_zeros;
+	uint16_t remaining, counter, *pad_header;
+	
+	remaining = (uint16_t)msg_len;
+	counter =0;
+	pad_header = ((uint16_t*)(my_pad));	
+	pad_zeros = ((block *)(my_pad));
+
+	// 异或全0，等于自身，为什么还要异或
+	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
+	tag_blks[2] = _mm_loadu_si128(&current_key);  // 用key来初始化结果
+
+	// 每一个block 128 = 16 * 8 
+	// 有效消息长度: 14 * 8 = 112
+	if(remaining>=112)//start 8 blocks parallel computing 
+	{
+		// ？？？？？
+		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); // 读取一个block，然后向右移动两个字节
+		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
+		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容, 前两个字节被换了
+		AES_ECB_8(cipher_blks,sched, mask); // mask用于初始异或每一个块
+		tag_8_xor(tag_blks,cipher_blks); // cipher_blks 8个块的结果异或，最终结果放在tag_blks[2]
+		counter +=8;
+		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	// 12 + 14 * 7 = 110
+		remaining -= 112; // 为什么日志只处理了110，但是这里却减了112
+		while(remaining >= 112){	
+			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
+			gen_7_blks(cipher_blks,log_msg,counter);
+			AES_ECB_8(cipher_blks,sched, mask);
+			// 最终结果的异或
+			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
+			counter += 8;
+			log_msg += 110;
+			remaining -= 112;
+		}
+	}//end of nblks
+	
+	if(remaining >=56){//4-block, 4*14=56 bytes log data
+		cmpt_4_blks(aes_blks,counter, log_msg, sched, mask);
+		tag_blks[0] = xor_block( xor_block(cipher_blks[0], cipher_blks[1]), xor_block(cipher_blks[2], cipher_blks[3]));  
+		tag_blks[2] = xor_block(tag_blks[2], tag_blks[0]);
+		remaining -= 56;
+		counter +=4;
+		log_msg +=54;/*56-byte computed, apply 54-byte, leaving 2-byte overwrote by counter*/
+	}
+	if (remaining >= 28) {//2-block, 2*14=28 bytes log data
+		cmpt_2_blks(aes_blks, counter, log_msg, sched, mask);
+		//AES_ECB_2(aes_blks,sched);
+		tag_blks[2] = xor_block(xor_block(cipher_blks[0], cipher_blks[1]), tag_blks[2]); 
+		remaining -= 28;
+		counter +=2;
+		log_msg +=26;/*28-byte computed, apply 26-byte, leaving 2-byte overwrote by counter*/
+	}
+	if (remaining >= 14) {//1-block 14 bytes log data
+		cmpt_a_blk(&aes_blks[0],counter, log_msg, sched, mask);
+		tag_blks[2] = xor_block(tag_blks[2], cipher_blks[0]);
+		remaining -= 14;
+		counter +=1;
+		log_msg +=12;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
+	}
+#if 1
+	if (remaining){//last block + generating new key
+		if (counter)  log_msg +=2;  // 不是第一个块, log_msg向右移动两个字节？？？？
+		counter += (14-remaining); // 位置编码
+		* pad_zeros = zero_block();
+		* pad_header = counter;
+		memcpy(&my_pad[2], log_msg, remaining); // 0,1 放的是位置编码
+		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
+
+		AES_ECB_3(cipher_blks, sched);
+		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]); // 拿到最终结果
+		// cipher_blks[1] = xor_block(current_state, sched[0]);  /*0 for updatting state*/
+		// cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
+		// AES_ECB_3(cipher_blks, sched);
+		// tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]); // 拿到最终结果
+		// current_key = xor_block(cipher_blks[2], current_state);
+		// current_state = xor_block(cipher_blks[1], current_state);
+	}else{
+		// 直接更新state && key
+		AES_ECB_2(cipher_blks, sched);
+		//pr_info("no remaining!\n");
+		// cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
+		// cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
+		// AES_ECB_2(cipher_blks, sched);
+		// current_key = xor_block(cipher_blks[1], current_state);
+		// current_state = xor_block(cipher_blks[0], current_state);
+	}
+#endif
+	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
+
+	return (out_tmp[0]);
+}
 
 
 
 static void __exit quickmod_exit(void)
 {
-	pr_info("Module removed:%s ", __func__);
+	pr_info("Module removed:%s \n", __func__);
 }
 
 module_init(benchmarking);
