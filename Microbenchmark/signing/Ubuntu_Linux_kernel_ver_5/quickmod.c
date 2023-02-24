@@ -29,7 +29,7 @@
 #include <linux/lsm_audit.h>
 
 
-static int len= 256; //generating size
+static int len= 1024; //generating size, 这个值要在脚本里改，这里改没有用
 module_param(len,int,S_IRUGO);  
 
 // #define iteration 200000
@@ -331,14 +331,6 @@ void AES_128_Key_Expansion(const unsigned char *userkey, void *key)
 		cipher_blks[7] =_mm_aesenclast_si128(cipher_blks[7], round_keys[10]); \
 	}while (0)
 
-#define light_gen_4_blks(cipher_blks,log_msg,counter)                            \
-    do{                                                                    \
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); \
-		cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); \
-		cipher_blks[2]  = gen_logging_blk((block*)(log_msg+28),(counter+3)); \
-		cipher_blks[3]  = gen_logging_blk((block*)(log_msg+42),(counter+4)); \
-	} while(0)
-
 #define LIGHT_AES_ECB_4(cipher_blks, sched)   \
 	do{                                        	   \
 		enc_4(cipher_blks, sched[1]);              \
@@ -356,11 +348,7 @@ void AES_128_Key_Expansion(const unsigned char *userkey, void *key)
 		cipher_blks[3] =_mm_aesenclast_si128(cipher_blks[3], sched[10]); \
 	}while (0)
 
-#define light_gen_2_blks(cipher_blks,log_msg,counter)                            \
-    do{                                                                    \
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); \
-		cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); \
-	} while(0)
+
 #define LIGHT_AES_ECB_2(cipher_blks, sched)   \
 	do{     \
 		enc_2(cipher_blks, sched[1]);              \
@@ -623,6 +611,26 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	return (out_tmp[0]);
 }
 
+
+static void light_parallel_4_blks(block *cipher_blks, uint16_t counter, const char *log_msg, const block *rounds_keys)
+{
+	cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); 
+	cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); 
+	cipher_blks[2]  = gen_logging_blk((block*)(log_msg+28),(counter+3)); 
+	cipher_blks[3]  = gen_logging_blk((block*)(log_msg+42),(counter+4)); 
+	LIGHT_AES_ECB_4(cipher_blks, rounds_keys);
+}
+static void light_parallel_2_blks(block *cipher_blks, uint16_t counter, const char *log_msg, const block *rounds_keys)
+{
+	cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); 
+	cipher_blks[1]  = gen_logging_blk((block*)(log_msg+14),(counter+2)); 
+	LIGHT_AES_ECB_2(cipher_blks, rounds_keys);
+}
+static void light_parallel_1_blks(block *cipher_blks, uint16_t counter, const char *log_msg, const block *rounds_keys)
+{
+	cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1)); 
+	light_aes_single(cipher_blks[0], rounds_keys);
+}
 /**  
 * MAC, signing a log message and updating the signing-key & state
 * Input @log_msg: a log data,  
@@ -632,7 +640,7 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 * Output: T(64-byte tag)
 **/ 
 // Even Mansour 来更新密钥
-static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_len)
+static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_len, const block* rounds_keys)
 {
 	uint16_t remaining = (uint16_t)msg_len;
 	block cipher_blks[8]; // 存放待加密的日志原文，最多可8路并行加密
@@ -640,10 +648,6 @@ static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_l
 	tag_blks[2] = xor_block(tag_blks[2], tag_blks[2]); //初始化为0
 	uint8_t counter = 0; // 分组块的编码
 	uint8_t paylad_len = 14; // 块长度为16 * 8 = 128， 前两个字节放位置编码，后面的是日志消息
-
-
-	block rounds_keys[11]; // 轮密钥
-	aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
 
 	while(remaining >= (paylad_len * 8)){
 		// 8 路并行
@@ -657,8 +661,9 @@ static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_l
 	}
 	if(remaining >= (paylad_len * 4)){
 		// 剩下的内容可以四路并行
-		light_gen_4_blks(cipher_blks, log_msg, counter);
-		LIGHT_AES_ECB_4(cipher_blks, rounds_keys);
+		light_parallel_4_blks(cipher_blks, counter, log_msg, rounds_keys);
+		// light_gen_4_blks(cipher_blks, log_msg, counter);
+		// LIGHT_AES_ECB_4(cipher_blks, rounds_keys);
 		tag_blks[0] = xor_block( xor_block(cipher_blks[0], cipher_blks[1]), xor_block(cipher_blks[2], cipher_blks[3]));  
 		tag_blks[2] = xor_block(tag_blks[2], tag_blks[0]);
 		log_msg += paylad_len * 4;
@@ -667,8 +672,9 @@ static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_l
 	}
 	if (remaining >= 28) {
 		// 剩下的内容可以两路并行
-		light_gen_2_blks(cipher_blks, log_msg, counter);
-		LIGHT_AES_ECB_2(cipher_blks, rounds_keys);
+		light_parallel_2_blks(cipher_blks, counter, log_msg, rounds_keys);
+		// light_gen_2_blks(cipher_blks, log_msg, counter);
+		// LIGHT_AES_ECB_2(cipher_blks, rounds_keys);
 		tag_blks[2] = xor_block(xor_block(cipher_blks[0], cipher_blks[1]), tag_blks[2]); 
 		log_msg += paylad_len * 2;
 		remaining -= paylad_len * 2;
@@ -677,8 +683,9 @@ static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_l
 
 	if (remaining >= 14) {
 		// 剩下的至少可以构成1个块
-		cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1));
-		light_aes_single(cipher_blks[0], rounds_keys);
+		light_parallel_1_blks(cipher_blks, counter, log_msg, rounds_keys);
+		// cipher_blks[0]  = gen_logging_blk((block*)(log_msg),(counter+1));
+		// light_aes_single(cipher_blks[0], rounds_keys);
 		tag_blks[2] = xor_block(tag_blks[2], cipher_blks[0]);
 		remaining -= paylad_len;
 		counter +=1;
@@ -700,13 +707,13 @@ unsigned char my_pad[16];
 		//pr_info("no remaining!");
 	}
 #endif
-	__u64 out_tmp[2];
 	// 更新密钥
 	cipher_blks[0] = xor_block(light_current_state, _mm_setr_epi32(0x0000, 0x0000, 0x0000, 0x0000));/*0 for updatting state*/
 	cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key2*/
     light_current_key = xor_block(cipher_blks[1], light_current_state);
 	light_current_state = xor_block(cipher_blks[0], light_current_state);
 
+	__u64 out_tmp[2];
 	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
 	return (out_tmp[0]);
 }
@@ -762,10 +769,9 @@ void erase_from_memory(void *pointer, size_t size_data)
 }
 
 
-static u64 sign_event(char *log_msg, siphash_key_t first_key,size_t key_len)
+static u64 sign_event(char *log_msg, siphash_key_t first_key,size_t key_len, size_t log_msg_len)
 {
-	//size_t log_msg_len = strlen(log_msg);
-	size_t  log_msg_len = len;
+	// size_t log_msg_len = strlen(log_msg);
 	u64 integrity_proof;
 
 	// Generate the integrity proof with the current key
@@ -796,8 +802,6 @@ void print_str(char* str,int len)
 	}
 	pr_info("");
 }
-
-
 
 /**
  * 单次简化后的AES和传统AES效率的对比
@@ -853,7 +857,6 @@ void test_aes_traditional_simplified(void){
     pr_info("-[ traditional AES]-: time =%llu ns, start =%llu ns, end =%llu\n", traditional_time, start_time, end_time);
 }
 
-
 void temp_aes_traditional(void){
     // 初始化日志
 	char *str; 
@@ -897,18 +900,18 @@ void temp_aes_traditional(void){
 
 /**
  * QuickLog使用简化后的AES，同使用LightMAC架构+传统AES签名日志消息的效率对比
+ * 密钥，实时更新，唯一大的区别是，QuickLog使用的是简化版AES，LightMAC使用的是传统AES；
+ * 目标：在可接受的性能开销（100ns内）内，获得更好的安全性和可用性
+ * 多出来的时间，实际上就是AES轮密钥更新的时间，实际本身二者加密的耗时并没有太大差异
 */
 void sign_benchmarking_quicklog_lightmac(void){
-	// 初始化密钥
-	crypto_int_all();
 	// 初始化日志内容
-	int len = 1024;
 	char *str; 
 	str = kmalloc(len, GFP_KERNEL);
 	memset(str,'a',(len));
 
 	int test_rounds = 10000;
-	unsigned long long  start_time, end_time, quicklog_time = 0, lightmac_time = 0; 
+	unsigned long long  start_time, end_time, quicklog_time = 0, lightmac_time = 0;
 	__u64  sign_tag;
 	// QuickLog
 	msleep(100);
@@ -923,12 +926,14 @@ void sign_benchmarking_quicklog_lightmac(void){
 	quicklog_time /= test_rounds;
 	pr_info("-[ quicklog_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", quicklog_time, start_time, end_time);
 
-
+	// LightMAC
 	msleep(100);
+	block rounds_keys[11]; // 轮密钥
 	start_time = ktime_get_ns();
 	for(int i = 0;i < test_rounds;i++){
 		kernel_fpu_begin();
-		sign_tag = light_mac_with_tradtional_mac(str, len);
+		aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
+		sign_tag = light_mac_with_tradtional_mac(str, len, rounds_keys);
 		kernel_fpu_end();
 		// msleep(100);
 	}
@@ -937,9 +942,75 @@ void sign_benchmarking_quicklog_lightmac(void){
 	lightmac_time /= test_rounds;
 	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
 }
+/**
+ * kennyloggings 和 LightMAC对比
+ * 都是预计算密钥，所以不包含密钥更新的时间
+ * kennyloggings使用的是传统的MAC框架
+ * LightMAC使用的是轻量级MAC框架
+ * 预期是LightMAC在kennyloggings基础上，时间开销降低
+*/
+void sign_benchmarking_kenny_lightmac(void){
+	// 初始化日志内容
+	char *str; 
+	str = kmalloc(len, GFP_KERNEL);
+	memset(str,'a',(len));
+
+	int test_rounds = 10000;
+	unsigned long long  start_time, end_time, lightmac_time = 0, kenny_time = 0;
+	__u64  sign_tag;
+
+
+	// LightMAC
+	register block * const_round_keys = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
+	msleep(100);
+	start_time = ktime_get_ns();
+	for(int i = 0;i < test_rounds;i++){
+		kernel_fpu_begin();
+		// aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
+		sign_tag = light_mac_with_tradtional_mac(str, len, const_round_keys);
+		kernel_fpu_end();
+		// msleep(100);
+	}
+	end_time = ktime_get_ns();
+	lightmac_time = end_time - start_time;
+	lightmac_time /= test_rounds;
+	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
+
+	// kennyloggings
+	siphash_key_t first_key;
+	size_t key_len = sizeof(first_key);
+	unsigned long long temp_sum_time = 0;
+
+	msleep(100);
+	for(int i = 0;i < test_rounds;i++){
+		get_random_bytes(&first_key, key_len);
+		start_time = ktime_get_ns();
+		sign_tag = sign_event(str, first_key, key_len, len);
+		end_time = ktime_get_ns();
+		temp_sum_time += end_time - start_time;
+	}
+	kenny_time = temp_sum_time / test_rounds;
+	temp_sum_time = 0;
+	msleep(100);
+	//Erasing Kennylogging's current key
+	// for(int i = 0;i < test_rounds;i++){
+	// 	get_random_bytes(&first_key, key_len);
+	// 	start_time = ktime_get_ns();
+	// 	erase_from_memory(&first_key, key_len);
+	// 	end_time = ktime_get_ns();
+	// 	temp_sum_time += end_time - start_time;
+	// }
+	// kenny_time +=  temp_sum_time / test_rounds;
+	pr_info("-[ kenny_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", kenny_time, start_time, end_time);
+}
+
 static int __init benchmarking(void)
 {
+	// 初始化密钥
+	crypto_int_all();
+	// test_aes_traditional_simplified();
 	sign_benchmarking_quicklog_lightmac();
+	sign_benchmarking_kenny_lightmac();
     return 0;
 	int i, j;
 	char *str; 
