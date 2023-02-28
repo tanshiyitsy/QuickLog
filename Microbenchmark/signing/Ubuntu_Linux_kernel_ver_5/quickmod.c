@@ -51,8 +51,7 @@ static unsigned long long my_time[1048576];
  * light_current_key = user_key
 */
 static block light_current_key, light_current_state;
-
-
+unsigned long long appd_tag_to_log_time = 0;  // 把生成的tag，附加到字符串的时间，这个时间固定
 
 /* Some helper functions */
 #define rnds 10 //AES rounds
@@ -503,8 +502,6 @@ void crypto_int_all(void)
 	kernel_fpu_end();
 }
 
-
-
 /**  
 * MAC, signing a log message and updating the signing-key & state
 * Input @log_msg: a log data,  
@@ -513,12 +510,14 @@ void crypto_int_all(void)
 *                         2 bytes counter(<i>) and 14 bytes log data(M_i)
 * Output: T(64-byte tag)
 **/ 
+// Even Mansour 来更新密钥
 static __u64 mac_core( const char *log_msg, const int msg_len)
 {
 	block mask, cipher_blks[8], tag_blks[3];
 	unsigned char my_pad[16];
 	__u64 out_tmp[2];
-	register block * sched = ((block *)(const_aeskey.rd_key)); 
+	// sched是固定的AES的key，长度为11个block
+	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
 	register block * aes_blks = cipher_blks;
 	block *pad_zeros;
 	uint16_t remaining, counter, *pad_header;
@@ -528,24 +527,28 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	pad_header = ((uint16_t*)(my_pad));	
 	pad_zeros = ((block *)(my_pad));
 
-	
+	// 异或全0，等于自身，为什么还要异或
 	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
-	tag_blks[2] = _mm_loadu_si128(&current_key);
+	tag_blks[2] = _mm_loadu_si128(&current_key);  // 用key来初始化结果
 
+	// 每一个block 128 = 16 * 8 
+	// 有效消息长度: 14 * 8 = 112
 	if(remaining>=112)//start 8 blocks parallel computing 
 	{
-		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); 
-		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0);
-		gen_7_blks(cipher_blks,log_msg,counter);
-		AES_ECB_8(cipher_blks,sched, mask);
-		tag_8_xor(tag_blks,cipher_blks);
+		// ？？？？？
+		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); // 读取一个block，然后向右移动两个字节
+		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
+		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容, 前两个字节被换了
+		AES_ECB_8(cipher_blks,sched, mask); // mask用于初始异或每一个块
+		tag_8_xor(tag_blks,cipher_blks); // cipher_blks 8个块的结果异或，最终结果放在tag_blks[2]
 		counter +=8;
-		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	
-		remaining -= 112;
+		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	// 12 + 14 * 7 = 110
+		remaining -= 112; // 为什么日志只处理了110，但是这里却减了112
 		while(remaining >= 112){	
 			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
 			gen_7_blks(cipher_blks,log_msg,counter);
 			AES_ECB_8(cipher_blks,sched, mask);
+			// 最终结果的异或
 			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
 			counter += 8;
 			log_msg += 110;
@@ -578,20 +581,21 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	}
 #if 1
 	if (remaining){//last block + generating new key
-		if (counter)  log_msg +=2;
-		counter += (14-remaining);
+		if (counter)  log_msg +=2;  // 不是第一个块, log_msg向右移动两个字节？？？？
+		counter += (14-remaining); // 位置编码
 		* pad_zeros = zero_block();
 		* pad_header = counter;
-		memcpy(&my_pad[2], log_msg, remaining);
-		cipher_blks[0] = xor_block( mask, *(block*)my_pad);
-		cipher_blks[1] = xor_block(current_state, sched[0]);
-		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));
+		memcpy(&my_pad[2], log_msg, remaining); // 0,1 放的是位置编码
+		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
+		cipher_blks[1] = xor_block(current_state, sched[0]);  /*0 for updatting state*/
+		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
 		AES_ECB_3(cipher_blks, sched);
-		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]);
+		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]); // 拿到最终结果
 		current_key = xor_block(cipher_blks[2], current_state);
 		current_state = xor_block(cipher_blks[1], current_state);
 	}else{
-		//pr_info("no remaining!\n");
+		// 直接更新state && key
+		//pr_info("no remaining!");
 		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
 		cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
 		AES_ECB_2(cipher_blks, sched);
@@ -599,116 +603,10 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 		current_state = xor_block(cipher_blks[0], current_state);
 	}
 #endif
-	_mm_store_si128((block*)out_tmp, tag_blks[2]);
+	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
 
 	return (out_tmp[0]);
 }
-
-/**  
-* MAC, signing a log message and updating the signing-key & state
-* Input @log_msg: a log data,  
-        @msg_len: the length of the log data 
-* Computing block format: a block(16 bytes) contains "<i>||M_i",  
-*                         2 bytes counter(<i>) and 14 bytes log data(M_i)
-* Output: T(64-byte tag)
-**/ 
-// Even Mansour 来更新密钥
-// static __u64 mac_core( const char *log_msg, const int msg_len)
-// {
-// 	block mask, cipher_blks[8], tag_blks[3];
-// 	unsigned char my_pad[16];
-// 	__u64 out_tmp[2];
-// 	// sched是固定的AES的key，长度为11个block
-// 	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
-// 	register block * aes_blks = cipher_blks;
-// 	block *pad_zeros;
-// 	uint16_t remaining, counter, *pad_header;
-	
-// 	remaining = (uint16_t)msg_len;
-// 	counter =0;
-// 	pad_header = ((uint16_t*)(my_pad));	
-// 	pad_zeros = ((block *)(my_pad));
-
-// 	// 异或全0，等于自身，为什么还要异或
-// 	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
-// 	tag_blks[2] = _mm_loadu_si128(&current_key);  // 用key来初始化结果
-
-// 	// 每一个block 128 = 16 * 8 
-// 	// 有效消息长度: 14 * 8 = 112
-// 	if(remaining>=112)//start 8 blocks parallel computing 
-// 	{
-// 		// ？？？？？
-// 		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); // 读取一个block，然后向右移动两个字节
-// 		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
-// 		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容, 前两个字节被换了
-// 		AES_ECB_8(cipher_blks,sched, mask); // mask用于初始异或每一个块
-// 		tag_8_xor(tag_blks,cipher_blks); // cipher_blks 8个块的结果异或，最终结果放在tag_blks[2]
-// 		counter +=8;
-// 		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	// 12 + 14 * 7 = 110
-// 		remaining -= 112; // 为什么日志只处理了110，但是这里却减了112
-// 		while(remaining >= 112){	
-// 			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
-// 			gen_7_blks(cipher_blks,log_msg,counter);
-// 			AES_ECB_8(cipher_blks,sched, mask);
-// 			// 最终结果的异或
-// 			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
-// 			counter += 8;
-// 			log_msg += 110;
-// 			remaining -= 112;
-// 		}
-// 	}//end of nblks
-	
-// 	if(remaining >=56){//4-block, 4*14=56 bytes log data
-// 		cmpt_4_blks(aes_blks,counter, log_msg, sched, mask);
-// 		tag_blks[0] = xor_block( xor_block(cipher_blks[0], cipher_blks[1]), xor_block(cipher_blks[2], cipher_blks[3]));  
-// 		tag_blks[2] = xor_block(tag_blks[2], tag_blks[0]);
-// 		remaining -= 56;
-// 		counter +=4;
-// 		log_msg +=54;/*56-byte computed, apply 54-byte, leaving 2-byte overwrote by counter*/
-// 	}
-// 	if (remaining >= 28) {//2-block, 2*14=28 bytes log data
-// 		cmpt_2_blks(aes_blks, counter, log_msg, sched, mask);
-// 		//AES_ECB_2(aes_blks,sched);
-// 		tag_blks[2] = xor_block(xor_block(cipher_blks[0], cipher_blks[1]), tag_blks[2]); 
-// 		remaining -= 28;
-// 		counter +=2;
-// 		log_msg +=26;/*28-byte computed, apply 26-byte, leaving 2-byte overwrote by counter*/
-// 	}
-// 	if (remaining >= 14) {//1-block 14 bytes log data
-// 		cmpt_a_blk(&aes_blks[0],counter, log_msg, sched, mask);
-// 		tag_blks[2] = xor_block(tag_blks[2], cipher_blks[0]);
-// 		remaining -= 14;
-// 		counter +=1;
-// 		log_msg +=12;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
-// 	}
-// #if 1
-// 	if (remaining){//last block + generating new key
-// 		if (counter)  log_msg +=2;  // 不是第一个块, log_msg向右移动两个字节？？？？
-// 		counter += (14-remaining); // 位置编码
-// 		* pad_zeros = zero_block();
-// 		* pad_header = counter;
-// 		memcpy(&my_pad[2], log_msg, remaining); // 0,1 放的是位置编码
-// 		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
-// 		cipher_blks[1] = xor_block(current_state, sched[0]);  /*0 for updatting state*/
-// 		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
-// 		AES_ECB_3(cipher_blks, sched);
-// 		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]); // 拿到最终结果
-// 		current_key = xor_block(cipher_blks[2], current_state);
-// 		current_state = xor_block(cipher_blks[1], current_state);
-// 	}else{
-// 		// 直接更新state && key
-// 		//pr_info("no remaining!");
-// 		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
-// 		cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
-// 		AES_ECB_2(cipher_blks, sched);
-// 		current_key = xor_block(cipher_blks[1], current_state);
-// 		current_state = xor_block(cipher_blks[0], current_state);
-// 	}
-// #endif
-// 	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
-
-// 	return (out_tmp[0]);
-// }
 
 
 static void light_parallel_4_blks(block *cipher_blks, uint16_t counter, const char *log_msg, const block *rounds_keys)
@@ -1098,6 +996,7 @@ void temp_aes_traditional(void){
 }
 
 /**
+ * QuickLog 和 LightMAC对比
  * QuickLog使用简化后的AES，同使用LightMAC架构+传统AES签名日志消息的效率对比
  * 密钥，实时更新，唯一大的区别是，QuickLog使用的是简化版AES，LightMAC使用的是传统AES；
  * 目标：在可接受的性能开销（100ns内）内，获得更好的安全性和可用性
@@ -1113,20 +1012,17 @@ void sign_benchmarking_quicklog_lightmac(void){
 	unsigned long long  start_time, end_time, quicklog_time = 0, lightmac_time = 0;
 	__u64  sign_tag;
 	// QuickLog
-	unsigned long long my_time[test_rounds];
 	msleep(100);
 	start_time = ktime_get_ns();
 	for(int i = 0;i < test_rounds;i++){
-		// start_time = ktime_get_ns();
 		kernel_fpu_begin();
 		sign_tag = mac_core(str, len);
 		kernel_fpu_end();
-		// end_time = ktime_get_ns();
-		// my_time[i] = end_time - start_time;
 	}
 	end_time = ktime_get_ns();
 	quicklog_time = end_time - start_time;
 	quicklog_time /= test_rounds;
+	quicklog_time += appd_tag_to_log_time;
 	pr_info("-[ quicklog_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", quicklog_time, start_time, end_time);
 
 	// LightMAC
@@ -1143,6 +1039,7 @@ void sign_benchmarking_quicklog_lightmac(void){
 	end_time = ktime_get_ns();
 	lightmac_time = end_time - start_time;
 	lightmac_time /= test_rounds;
+	lightmac_time += appd_tag_to_log_time;
 	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
 }
 /**
@@ -1177,6 +1074,7 @@ void sign_benchmarking_kenny_lightmac(void){
 	end_time = ktime_get_ns();
 	lightmac_time = end_time - start_time;
 	lightmac_time /= test_rounds;
+	lightmac_time += appd_tag_to_log_time;
 	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
 
 	// kennyloggings
@@ -1193,29 +1091,12 @@ void sign_benchmarking_kenny_lightmac(void){
 		temp_sum_time += end_time - start_time;
 	}
 	kenny_time = temp_sum_time / test_rounds;
-	temp_sum_time = 0;
+	kenny_time += appd_tag_to_log_time;
 	msleep(100);
-	//Erasing Kennylogging's current key
-	// for(int i = 0;i < test_rounds;i++){
-	// 	get_random_bytes(&first_key, key_len);
-	// 	start_time = ktime_get_ns();
-	// 	erase_from_memory(&first_key, key_len);
-	// 	end_time = ktime_get_ns();
-	// 	temp_sum_time += end_time - start_time;
-	// }
-	// kenny_time +=  temp_sum_time / test_rounds;
 	pr_info("-[ kenny_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", kenny_time, start_time, end_time);
 }
 
-static int __init benchmarking(void)
-{
-	// pr_info("\n_______Starting: log size = %dB______\n", len);
-	// // 初始化密钥
-	// crypto_int_all();
-	// // test_aes_traditional_simplified();
-	// sign_benchmarking_quicklog_lightmac();
-	// // sign_benchmarking_kenny_lightmac();
-    // return 0;
+void old_benchmarking(void){
 	int i, j;
 	char *str; 
 	unsigned long long  start_time, end_time, appd_med, kenny_med[10], quick_med[10], quick_2_med[10];
@@ -1226,10 +1107,8 @@ static int __init benchmarking(void)
 	struct audit_buffer *ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_SYSCALL);
 
 	key_len = sizeof(first_key);
-	// str = kmalloc(len, GFP_KERNEL);
-    // memset(str,'a',(len));
-	str = kmalloc(10240, GFP_KERNEL);
-    memset(str,'a',(8192));
+	str = kmalloc(len, GFP_KERNEL);
+    memset(str,'a',(len));
 
 	
 	pr_info("_______Starting: log size = %dB______\n", len);
@@ -1238,32 +1117,30 @@ static int __init benchmarking(void)
 	msleep(100);
 
 	/*************************************QuickLog*************************************************/	
-	
 	//Quicklog signing a message
 	for(i=0;i<10;i++){
 		for(j=0;j<iteration;j++)
 		{	
-			
 			start_time = ktime_get_ns();
-
 			kernel_fpu_begin();
 			quick_tag = mac_core(str, len);
 			kernel_fpu_end();
 			
 			end_time = ktime_get_ns();
-			
 			my_time[j] = end_time - start_time;
 			
 		}
 		
 		quick_med[i] =  median(iteration,  my_time);  
-
-
 		msleep(100);
 	}
 	sum =0;
 	for(i=0;i<10;i++) sum +=quick_med[i];
 	mean = (sum/10);
+
+	// pr_info("-[QuickLog Sign]-: median time =%llu ns\n", mean);
+	// return;
+
 	sd_sum =0;
 	for(i=0;i<10;i++) sd_sum +=(quick_med[i]-mean)*(quick_med[i]-mean);
 	q_sd = sd_sum/10;
@@ -1291,7 +1168,6 @@ static int __init benchmarking(void)
 		}
 		
 		quick_2_med[i] =  median(iteration,  my_time);  
-
 		msleep(100);
 	}
 
@@ -1378,11 +1254,43 @@ static int __init benchmarking(void)
 
 	pr_info("\n-----------------------------------------------------------\n");
 	msleep(20000);
-	return 0;
 }
+static int __init benchmarking(void)
+{
+	// old_benchmarking();
+	// return 0;
+	pr_info("\n_______Starting: log size = %dB______\n", len);
+	crypto_int_all(); // 初始化密钥
+	
+	// Appending the tag to the log message	
+	char *str; 
+	str = kmalloc(len, GFP_KERNEL);
+	memset(str,'a',(len));
+	siphash_key_t first_key;
+	get_random_bytes(&first_key, sizeof(first_key));
+ 	__u64  tag = sign_event(str, first_key, sizeof(first_key), len);
+	unsigned long long  start_time, end_time;
+	struct audit_buffer *ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_SYSCALL);
 
+	for(int j=0;j<1000;j++)
+	{	
 
+		start_time = ktime_get_ns();
+		audit_log_format(ab, " p=%llx", tag);
+		end_time = ktime_get_ns();
+		
+		my_time[j] = end_time - start_time;
+		
+	}
+	appd_tag_to_log_time = median(1000,  my_time);
+	pr_info("-[const time]-: appd_tag_to_log time =%llu ns\n", appd_tag_to_log_time);
 
+	// 开始对比加密时间
+	// test_aes_traditional_simplified();
+	sign_benchmarking_quicklog_lightmac();
+	sign_benchmarking_kenny_lightmac();
+    return 0;
+}
 
 
 static void __exit quickmod_exit(void)
