@@ -1013,33 +1013,31 @@ void sign_benchmarking_quicklog_lightmac(void){
 	__u64  sign_tag;
 	// QuickLog
 	msleep(100);
-	start_time = ktime_get_ns();
 	for(int i = 0;i < test_rounds;i++){
+		start_time = ktime_get_ns();
 		kernel_fpu_begin();
 		sign_tag = mac_core(str, len);
 		kernel_fpu_end();
+		end_time = ktime_get_ns();
+		my_time[i] = end_time - start_time;
 	}
-	end_time = ktime_get_ns();
-	quicklog_time = end_time - start_time;
-	quicklog_time /= test_rounds;
-	quicklog_time += appd_tag_to_log_time;
+	quicklog_time =  median(test_rounds,  my_time) + appd_tag_to_log_time;
 	pr_info("-[ quicklog_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", quicklog_time, start_time, end_time);
 
 	// LightMAC
 	msleep(100);
 	block rounds_keys[11]; // 轮密钥
-	start_time = ktime_get_ns();
 	for(int i = 0;i < test_rounds;i++){
+		start_time = ktime_get_ns();
 		kernel_fpu_begin();
 		aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
 		sign_tag = light_mac_with_tradtional_mac(str, len, rounds_keys);
 		kernel_fpu_end();
-		// msleep(100);
+		end_time = ktime_get_ns();
+		my_time[i] = end_time - start_time;
 	}
-	end_time = ktime_get_ns();
-	lightmac_time = end_time - start_time;
-	lightmac_time /= test_rounds;
-	lightmac_time += appd_tag_to_log_time;
+	
+	lightmac_time = median(test_rounds,  my_time) + appd_tag_to_log_time;
 	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
 }
 /**
@@ -1059,28 +1057,24 @@ void sign_benchmarking_kenny_lightmac(void){
 	unsigned long long  start_time, end_time, lightmac_time = 0, kenny_time = 0;
 	__u64  sign_tag;
 
-
 	// LightMAC
 	register block * const_round_keys = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
 	msleep(100);
-	start_time = ktime_get_ns();
 	for(int i = 0;i < test_rounds;i++){
+		start_time = ktime_get_ns();
 		kernel_fpu_begin();
 		// aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
 		sign_tag = light_mac_with_tradtional_mac(str, len, const_round_keys);
 		kernel_fpu_end();
-		// msleep(100);
+		end_time = ktime_get_ns();
+		my_time[i] = end_time - start_time;
 	}
-	end_time = ktime_get_ns();
-	lightmac_time = end_time - start_time;
-	lightmac_time /= test_rounds;
-	lightmac_time += appd_tag_to_log_time;
+	lightmac_time = median(test_rounds,  my_time) + appd_tag_to_log_time;
 	pr_info("-[ lightmac_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", lightmac_time, start_time, end_time);
 
 	// kennyloggings
 	siphash_key_t first_key;
 	size_t key_len = sizeof(first_key);
-	unsigned long long temp_sum_time = 0;
 
 	msleep(100);
 	for(int i = 0;i < test_rounds;i++){
@@ -1088,10 +1082,9 @@ void sign_benchmarking_kenny_lightmac(void){
 		start_time = ktime_get_ns();
 		sign_tag = sign_event(str, first_key, key_len, len);
 		end_time = ktime_get_ns();
-		temp_sum_time += end_time - start_time;
+		my_time[i] = end_time - start_time;
 	}
-	kenny_time = temp_sum_time / test_rounds;
-	kenny_time += appd_tag_to_log_time;
+	kenny_time = median(test_rounds,  my_time) + appd_tag_to_log_time;
 	msleep(100);
 	pr_info("-[ kenny_time]-: time =%llu ns, start =%llu ns, end =%llu ns\n", kenny_time, start_time, end_time);
 }
