@@ -33,8 +33,7 @@ static int len= 1024; //generating size, 这个值要在脚本里改，这里改
 module_param(len,int,S_IRUGO);  
 
 // #define iteration 200000
-#define iteration 100000
-
+#define iteration 1000
 
 typedef __m128i block;
 typedef struct {block rd_key[11]; } AES_KEY;
@@ -505,6 +504,7 @@ void crypto_int_all(void)
 }
 
 
+
 /**  
 * MAC, signing a log message and updating the signing-key & state
 * Input @log_msg: a log data,  
@@ -513,14 +513,12 @@ void crypto_int_all(void)
 *                         2 bytes counter(<i>) and 14 bytes log data(M_i)
 * Output: T(64-byte tag)
 **/ 
-// Even Mansour 来更新密钥
 static __u64 mac_core( const char *log_msg, const int msg_len)
 {
 	block mask, cipher_blks[8], tag_blks[3];
 	unsigned char my_pad[16];
 	__u64 out_tmp[2];
-	// sched是固定的AES的key，长度为11个block
-	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
+	register block * sched = ((block *)(const_aeskey.rd_key)); 
 	register block * aes_blks = cipher_blks;
 	block *pad_zeros;
 	uint16_t remaining, counter, *pad_header;
@@ -530,28 +528,24 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	pad_header = ((uint16_t*)(my_pad));	
 	pad_zeros = ((block *)(my_pad));
 
-	// 异或全0，等于自身，为什么还要异或
+	
 	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
-	tag_blks[2] = _mm_loadu_si128(&current_key);  // 用key来初始化结果
+	tag_blks[2] = _mm_loadu_si128(&current_key);
 
-	// 每一个block 128 = 16 * 8 
-	// 有效消息长度: 14 * 8 = 112
 	if(remaining>=112)//start 8 blocks parallel computing 
 	{
-		// ？？？？？
-		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); // 读取一个block，然后向右移动两个字节
-		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
-		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容, 前两个字节被换了
-		AES_ECB_8(cipher_blks,sched, mask); // mask用于初始异或每一个块
-		tag_8_xor(tag_blks,cipher_blks); // cipher_blks 8个块的结果异或，最终结果放在tag_blks[2]
+		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); 
+		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0);
+		gen_7_blks(cipher_blks,log_msg,counter);
+		AES_ECB_8(cipher_blks,sched, mask);
+		tag_8_xor(tag_blks,cipher_blks);
 		counter +=8;
-		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	// 12 + 14 * 7 = 110
-		remaining -= 112; // 为什么日志只处理了110，但是这里却减了112
+		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	
+		remaining -= 112;
 		while(remaining >= 112){	
 			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
 			gen_7_blks(cipher_blks,log_msg,counter);
 			AES_ECB_8(cipher_blks,sched, mask);
-			// 最终结果的异或
 			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
 			counter += 8;
 			log_msg += 110;
@@ -584,21 +578,20 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 	}
 #if 1
 	if (remaining){//last block + generating new key
-		if (counter)  log_msg +=2;  // 不是第一个块, log_msg向右移动两个字节？？？？
-		counter += (14-remaining); // 位置编码
+		if (counter)  log_msg +=2;
+		counter += (14-remaining);
 		* pad_zeros = zero_block();
 		* pad_header = counter;
-		memcpy(&my_pad[2], log_msg, remaining); // 0,1 放的是位置编码
-		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
-		cipher_blks[1] = xor_block(current_state, sched[0]);  /*0 for updatting state*/
-		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
+		memcpy(&my_pad[2], log_msg, remaining);
+		cipher_blks[0] = xor_block( mask, *(block*)my_pad);
+		cipher_blks[1] = xor_block(current_state, sched[0]);
+		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));
 		AES_ECB_3(cipher_blks, sched);
-		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]); // 拿到最终结果
+		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]);
 		current_key = xor_block(cipher_blks[2], current_state);
 		current_state = xor_block(cipher_blks[1], current_state);
 	}else{
-		// 直接更新state && key
-		//pr_info("no remaining!");
+		//pr_info("no remaining!\n");
 		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
 		cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
 		AES_ECB_2(cipher_blks, sched);
@@ -606,10 +599,116 @@ static __u64 mac_core( const char *log_msg, const int msg_len)
 		current_state = xor_block(cipher_blks[0], current_state);
 	}
 #endif
-	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
+	_mm_store_si128((block*)out_tmp, tag_blks[2]);
 
 	return (out_tmp[0]);
 }
+
+/**  
+* MAC, signing a log message and updating the signing-key & state
+* Input @log_msg: a log data,  
+        @msg_len: the length of the log data 
+* Computing block format: a block(16 bytes) contains "<i>||M_i",  
+*                         2 bytes counter(<i>) and 14 bytes log data(M_i)
+* Output: T(64-byte tag)
+**/ 
+// Even Mansour 来更新密钥
+// static __u64 mac_core( const char *log_msg, const int msg_len)
+// {
+// 	block mask, cipher_blks[8], tag_blks[3];
+// 	unsigned char my_pad[16];
+// 	__u64 out_tmp[2];
+// 	// sched是固定的AES的key，长度为11个block
+// 	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小
+// 	register block * aes_blks = cipher_blks;
+// 	block *pad_zeros;
+// 	uint16_t remaining, counter, *pad_header;
+	
+// 	remaining = (uint16_t)msg_len;
+// 	counter =0;
+// 	pad_header = ((uint16_t*)(my_pad));	
+// 	pad_zeros = ((block *)(my_pad));
+
+// 	// 异或全0，等于自身，为什么还要异或
+// 	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
+// 	tag_blks[2] = _mm_loadu_si128(&current_key);  // 用key来初始化结果
+
+// 	// 每一个block 128 = 16 * 8 
+// 	// 有效消息长度: 14 * 8 = 112
+// 	if(remaining>=112)//start 8 blocks parallel computing 
+// 	{
+// 		// ？？？？？
+// 		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); // 读取一个block，然后向右移动两个字节
+// 		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0); // 第一个块中的0，用counter+1替换
+// 		gen_7_blks(cipher_blks,log_msg,counter); // 这7个块的counter分别替换的是哪里的内容, 前两个字节被换了
+// 		AES_ECB_8(cipher_blks,sched, mask); // mask用于初始异或每一个块
+// 		tag_8_xor(tag_blks,cipher_blks); // cipher_blks 8个块的结果异或，最终结果放在tag_blks[2]
+// 		counter +=8;
+// 		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	// 12 + 14 * 7 = 110
+// 		remaining -= 112; // 为什么日志只处理了110，但是这里却减了112
+// 		while(remaining >= 112){	
+// 			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
+// 			gen_7_blks(cipher_blks,log_msg,counter);
+// 			AES_ECB_8(cipher_blks,sched, mask);
+// 			// 最终结果的异或
+// 			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
+// 			counter += 8;
+// 			log_msg += 110;
+// 			remaining -= 112;
+// 		}
+// 	}//end of nblks
+	
+// 	if(remaining >=56){//4-block, 4*14=56 bytes log data
+// 		cmpt_4_blks(aes_blks,counter, log_msg, sched, mask);
+// 		tag_blks[0] = xor_block( xor_block(cipher_blks[0], cipher_blks[1]), xor_block(cipher_blks[2], cipher_blks[3]));  
+// 		tag_blks[2] = xor_block(tag_blks[2], tag_blks[0]);
+// 		remaining -= 56;
+// 		counter +=4;
+// 		log_msg +=54;/*56-byte computed, apply 54-byte, leaving 2-byte overwrote by counter*/
+// 	}
+// 	if (remaining >= 28) {//2-block, 2*14=28 bytes log data
+// 		cmpt_2_blks(aes_blks, counter, log_msg, sched, mask);
+// 		//AES_ECB_2(aes_blks,sched);
+// 		tag_blks[2] = xor_block(xor_block(cipher_blks[0], cipher_blks[1]), tag_blks[2]); 
+// 		remaining -= 28;
+// 		counter +=2;
+// 		log_msg +=26;/*28-byte computed, apply 26-byte, leaving 2-byte overwrote by counter*/
+// 	}
+// 	if (remaining >= 14) {//1-block 14 bytes log data
+// 		cmpt_a_blk(&aes_blks[0],counter, log_msg, sched, mask);
+// 		tag_blks[2] = xor_block(tag_blks[2], cipher_blks[0]);
+// 		remaining -= 14;
+// 		counter +=1;
+// 		log_msg +=12;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
+// 	}
+// #if 1
+// 	if (remaining){//last block + generating new key
+// 		if (counter)  log_msg +=2;  // 不是第一个块, log_msg向右移动两个字节？？？？
+// 		counter += (14-remaining); // 位置编码
+// 		* pad_zeros = zero_block();
+// 		* pad_header = counter;
+// 		memcpy(&my_pad[2], log_msg, remaining); // 0,1 放的是位置编码
+// 		cipher_blks[0] = xor_block( mask, *(block*)my_pad);  // key异或上原始内容
+// 		cipher_blks[1] = xor_block(current_state, sched[0]);  /*0 for updatting state*/
+// 		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000)); /*1 for updatting key*/
+// 		AES_ECB_3(cipher_blks, sched);
+// 		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]); // 拿到最终结果
+// 		current_key = xor_block(cipher_blks[2], current_state);
+// 		current_state = xor_block(cipher_blks[1], current_state);
+// 	}else{
+// 		// 直接更新state && key
+// 		//pr_info("no remaining!");
+// 		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
+// 		cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
+// 		AES_ECB_2(cipher_blks, sched);
+// 		current_key = xor_block(cipher_blks[1], current_state);
+// 		current_state = xor_block(cipher_blks[0], current_state);
+// 	}
+// #endif
+// 	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
+
+// 	return (out_tmp[0]);
+// }
 
 
 static void light_parallel_4_blks(block *cipher_blks, uint16_t counter, const char *log_msg, const block *rounds_keys)
@@ -717,6 +816,106 @@ unsigned char my_pad[16];
 	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
 	return (out_tmp[0]);
 }
+
+
+
+
+/**  
+* QuickLog2: updating the tag, signing-key & state
+* Input @log_msg: a log data, @msg_len: the length of the data
+* Computing block format: a block(16 bytes) contains "<i>||M_i",  
+*                         2 bytes counter(<i>) and 14 bytes log data(M_i)
+* 
+**/
+static void mac_core_2(const char *log_msg, const int msg_len)
+{
+	block mask, cipher_blks[8], tag_blks[3];
+	unsigned char my_pad[16];
+
+	register block * sched = ((block *)(const_aeskey.rd_key)); 
+	register block * aes_blks = cipher_blks;
+	block *pad_zeros;
+	uint16_t remaining, counter, *pad_header;
+	
+	remaining = (uint16_t)msg_len;
+	counter =0;
+	pad_header = ((uint16_t*)(my_pad));	
+	pad_zeros = ((block *)(my_pad));
+
+	
+	mask = _mm_xor_si128(sched[0], current_key);//xor the signing key with the aes public key
+	tag_blks[2] = _mm_loadu_si128(&current_key);
+
+	if(remaining>=112)//start 8 blocks parallel computing 
+	{
+		cipher_blks[0]  = _mm_srli_si128(_mm_loadu_si128((block*)log_msg), 2); 
+		cipher_blks[0]  = _mm_insert_epi16(cipher_blks[0], counter+1, 0);
+		gen_7_blks(cipher_blks,log_msg,counter);
+		AES_ECB_8(cipher_blks,sched, mask);
+		tag_8_xor(tag_blks,cipher_blks);
+		counter +=8;
+		log_msg +=110;/*112-byte computed, apply 110-byte, leaving 2-byte overwrote by counter*/	
+		remaining -= 112;
+		while(remaining >= 112){	
+			cipher_blks[0]  = gen_logging_blk((block*)log_msg, counter+1); 
+			gen_7_blks(cipher_blks,log_msg,counter);
+			AES_ECB_8(cipher_blks,sched, mask);
+			tag_8_xor(tag_blks,cipher_blks);/*)Xor each block*/
+			counter += 8;
+			log_msg += 110;
+			remaining -= 112;
+		}
+	}//end of nblks
+	
+	if(remaining >=56){//4-block, 4*14=56 bytes log data
+		cmpt_4_blks(aes_blks,counter, log_msg, sched, mask);
+		tag_blks[0] = xor_block( xor_block(cipher_blks[0], cipher_blks[1]), xor_block(cipher_blks[2], cipher_blks[3]));  
+		tag_blks[2] = xor_block(tag_blks[2], tag_blks[0]);
+		remaining -= 56;
+		counter +=4;
+		log_msg +=54;/*56-byte computed, apply 54-byte, leaving 2-byte overwrote by counter*/
+	}
+	if (remaining >= 28) {//2-block, 2*14=28 bytes log data
+		cmpt_2_blks(aes_blks, counter, log_msg, sched, mask);
+		//AES_ECB_2(aes_blks,sched);
+		tag_blks[2] = xor_block(xor_block(cipher_blks[0], cipher_blks[1]), tag_blks[2]); 
+		remaining -= 28;
+		counter +=2;
+		log_msg +=26;/*28-byte computed, apply 26-byte, leaving 2-byte overwrote by counter*/
+	}
+	if (remaining >= 14) {//1-block 14 bytes log data
+		cmpt_a_blk(&aes_blks[0],counter, log_msg, sched, mask);
+		tag_blks[2] = xor_block(tag_blks[2], cipher_blks[0]);
+		remaining -= 14;
+		counter +=1;
+		log_msg +=12;/*14-byte computed, apply 12-byte, leaving 2-byte overwrote by counter*/
+	}
+
+	if (remaining){//last block + generating new key
+		if (counter)  log_msg +=2;
+		counter += (14-remaining);
+		* pad_zeros = zero_block();
+		* pad_header = counter;
+		memcpy(&my_pad[2], log_msg, remaining);
+		cipher_blks[0] = xor_block( mask, *(block*)my_pad);
+		cipher_blks[1] = xor_block(current_state, sched[0]);
+		cipher_blks[2] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));
+		AES_ECB_3(cipher_blks, sched);
+		tag_blks[2] = xor_block(cipher_blks[0], tag_blks[2]);
+		current_key = xor_block(cipher_blks[2], current_state);
+		current_state = xor_block(cipher_blks[1], current_state);
+		q2_tag = xor_block(tag_blks[2], q2_tag );	
+	}else{
+		//pr_info("no remaining!\n");
+		cipher_blks[0] = xor_block(current_state, sched[0]);/*0 for updatting state*/
+		cipher_blks[0] = xor_block(cipher_blks[1], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key*/
+		AES_ECB_2(cipher_blks, sched);
+		current_key = xor_block(cipher_blks[1], current_state);
+		current_state = xor_block(cipher_blks[0], current_state);
+		q2_tag = xor_block(tag_blks[2], q2_tag );	
+	}
+}
+
 
 #undef gen_7_blks
 #undef prernd_8
@@ -910,16 +1109,20 @@ void sign_benchmarking_quicklog_lightmac(void){
 	str = kmalloc(len, GFP_KERNEL);
 	memset(str,'a',(len));
 
-	int test_rounds = 10000;
+	int test_rounds = 1000;
 	unsigned long long  start_time, end_time, quicklog_time = 0, lightmac_time = 0;
 	__u64  sign_tag;
 	// QuickLog
+	unsigned long long my_time[test_rounds];
 	msleep(100);
 	start_time = ktime_get_ns();
 	for(int i = 0;i < test_rounds;i++){
+		// start_time = ktime_get_ns();
 		kernel_fpu_begin();
 		sign_tag = mac_core(str, len);
 		kernel_fpu_end();
+		// end_time = ktime_get_ns();
+		// my_time[i] = end_time - start_time;
 	}
 	end_time = ktime_get_ns();
 	quicklog_time = end_time - start_time;
@@ -1006,12 +1209,13 @@ void sign_benchmarking_kenny_lightmac(void){
 
 static int __init benchmarking(void)
 {
-	// 初始化密钥
-	crypto_int_all();
-	// test_aes_traditional_simplified();
-	sign_benchmarking_quicklog_lightmac();
-	sign_benchmarking_kenny_lightmac();
-    return 0;
+	// pr_info("\n_______Starting: log size = %dB______\n", len);
+	// // 初始化密钥
+	// crypto_int_all();
+	// // test_aes_traditional_simplified();
+	// sign_benchmarking_quicklog_lightmac();
+	// // sign_benchmarking_kenny_lightmac();
+    // return 0;
 	int i, j;
 	char *str; 
 	unsigned long long  start_time, end_time, appd_med, kenny_med[10], quick_med[10], quick_2_med[10];
@@ -1022,52 +1226,158 @@ static int __init benchmarking(void)
 	struct audit_buffer *ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_SYSCALL);
 
 	key_len = sizeof(first_key);
-	int len = 8192;
-	str = kmalloc(len, GFP_KERNEL);
-    memset(str,'a',(len));
+	// str = kmalloc(len, GFP_KERNEL);
+    // memset(str,'a',(len));
+	str = kmalloc(10240, GFP_KERNEL);
+    memset(str,'a',(8192));
+
 	
 	pr_info("_______Starting: log size = %dB______\n", len);
 	crypto_int();
 
-
-/*************************************QuickLog*************************************************/	
-	int test_rounds = 10;
-	for(int i = 0;i < test_rounds;i++){
-		quick_med[i] = 0;
-	}
 	msleep(100);
+
+	/*************************************QuickLog*************************************************/	
+	
 	//Quicklog signing a message
-	for(i=0;i<test_rounds;i++){
+	for(i=0;i<10;i++){
 		for(j=0;j<iteration;j++)
 		{	
+			
 			start_time = ktime_get_ns();
+
 			kernel_fpu_begin();
 			quick_tag = mac_core(str, len);
 			kernel_fpu_end();
+			
 			end_time = ktime_get_ns();
-			// my_time 的长度 1048576
+			
 			my_time[j] = end_time - start_time;
 			
 		}
-		quick_med[i] =  median(iteration,  my_time);
+		
+		quick_med[i] =  median(iteration,  my_time);  
+
+
 		msleep(100);
 	}
-	
-	sum = 0;
-	for(i=0;i<test_rounds;i++) sum +=quick_med[i];
-
-	mean = (sum/test_rounds);
-	pr_info("-[QuickLog Sign]-: mean time =%llu ns\n", mean);
-	return 0;
+	sum =0;
+	for(i=0;i<10;i++) sum +=quick_med[i];
+	mean = (sum/10);
 	sd_sum =0;
-	for(i=0;i<test_rounds;i++) sd_sum +=(quick_med[i]-mean)*(quick_med[i]-mean);
+	for(i=0;i<10;i++) sd_sum +=(quick_med[i]-mean)*(quick_med[i]-mean);
 	q_sd = sd_sum/10;
 	q_sd = int_sqrt(q_sd);
 
 	msleep(100);
 
-	// pr_info("-[QuickLog Sign]-: median time =%llu ns, standard deviation = %llu", quick_med[0], q_sd);
-	// return 0;
+	
+
+/*************************************QuickLog2*************************************************/
+	for(i=0;i<10;i++){
+		for(j=0;j<iteration;j++)
+		{	
+
+			start_time = ktime_get_ns();
+
+			kernel_fpu_begin();
+			mac_core_2(str, len);
+			kernel_fpu_end();
+			
+			end_time = ktime_get_ns();
+			
+			my_time[j] = end_time - start_time;
+			
+		}
+		
+		quick_2_med[i] =  median(iteration,  my_time);  
+
+		msleep(100);
+	}
+
+
+	sum =0;
+	for(i=0;i<10;i++) sum +=quick_2_med[i];
+	mean = (sum/10);
+	sd_sum =0;
+	for(i=0;i<10;i++) sd_sum +=(quick_2_med[i]-mean)*(quick_2_med[i]-mean);
+	q2_sd = sd_sum/10;
+	q2_sd = int_sqrt(q2_sd);
+
+	
+
+	msleep(100);
+	/*************************************Kennylogging *********************************/
+	
+	//Kennylogging signing a message
+	for(i=0;i<10;i++){
+	for(j=0;j<iteration;j++)
+		{
+			get_random_bytes(&first_key, key_len);
+
+			start_time = ktime_get_ns();
+			kenny_tag = sign_event(str, first_key, key_len, len);
+			end_time = ktime_get_ns();
+			my_time[j] = end_time - start_time;
+			
+		}
+		kenny_med[i] =  median(iteration,  my_time);  
+
+		msleep(100);
+	}
+
+	sum =0;
+	for(i=0;i<10;i++) sum +=kenny_med[i];
+	mean = (sum/10);
+	sd_sum =0;
+	for(i=0;i<10;i++) sd_sum +=(kenny_med[i]-mean)*(kenny_med[i]-mean);
+	k_sd = sd_sum/10;
+	k_sd = int_sqrt(k_sd);
+
+
+   //Erasing Kennylogging's current key
+
+	for(j=0;j<iteration;j++)
+	{
+		get_random_bytes(&first_key, key_len);
+
+		start_time = ktime_get_ns();
+		erase_from_memory(&first_key, key_len);
+		end_time = ktime_get_ns();
+		my_time[j] = end_time - start_time;
+		
+	}
+	kenny_med[0] +=  median(iteration,  my_time);  
+
+	msleep(100);
+
+
+	// Appending the tag to the log message	
+	audit_log_format(ab, "type=SOCKADDR msg=audit(1650461786.949:105297428)  : saddr=0100");
+	
+	for(j=0;j<1000;j++)
+	{	
+
+		start_time = ktime_get_ns();
+
+		audit_log_format(ab, " p=%llx", kenny_tag);
+		
+		end_time = ktime_get_ns();
+		
+		my_time[j] = end_time - start_time;
+		
+	}
+	appd_med = median(1000,  my_time);
+	kenny_med[0] +=  appd_med;  
+	quick_med[0] +=  appd_med;
+
+
+	pr_info("-[QuickLog Sign]-: median time =%llu ns, standard deviation = %llu\n", quick_med[0], q_sd);
+	pr_info("--[QuickLog2 Sign]--: median time =%llu ns, standard deviation = %llu\n", quick_2_med[0], q2_sd);
+	pr_info("(KennyLoggings Sign): median time =%llu ns, standard deviation = %llu\n", kenny_med[0], k_sd);
+
+	pr_info("\n-----------------------------------------------------------\n");
+	msleep(20000);
 	return 0;
 }
 
