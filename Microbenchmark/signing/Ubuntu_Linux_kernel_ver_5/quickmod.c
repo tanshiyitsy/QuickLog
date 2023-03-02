@@ -642,6 +642,7 @@ static __u64 light_mac_with_tradtional_mac( const char *log_msg, const int msg_l
 	uint16_t remaining = (uint16_t)msg_len;
 	block cipher_blks[8]; // 存放待加密的日志原文，最多可8路并行加密
 	block tag_blks[3]; // 最终结果存放
+	register block * sched = ((block *)(const_aeskey.rd_key)); // 11个block长度大小,全0轮密钥
 	tag_blks[2] = xor_block(tag_blks[2], tag_blks[2]); //初始化为0
 	uint8_t counter = 0; // 分组块的编码
 	uint8_t paylad_len = 14; // 块长度为16 * 8 = 128， 前两个字节放位置编码，后面的是日志消息
@@ -707,6 +708,7 @@ unsigned char my_pad[16];
 	// 更新密钥
 	cipher_blks[0] = xor_block(light_current_state, _mm_setr_epi32(0x0000, 0x0000, 0x0000, 0x0000));/*0 for updatting state*/
 	cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key2*/
+	AES_ECB_2(cipher_blks, sched);
     light_current_key = xor_block(cipher_blks[1], light_current_state);
 	light_current_state = xor_block(cipher_blks[0], light_current_state);
 
