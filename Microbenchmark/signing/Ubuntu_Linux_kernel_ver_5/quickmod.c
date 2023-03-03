@@ -50,7 +50,7 @@ static unsigned long long my_time[1048576];
  * 我定义的变量
  * light_current_key = user_key
 */
-static block light_current_key, light_current_state;
+static block light_current_key1, light_current_state1,light_current_key2, light_current_state2;
 unsigned long long appd_tag_to_log_time = 0;  // 把生成的tag，附加到字符串的时间，这个时间固定
 
 /* Some helper functions */
@@ -405,6 +405,20 @@ static void aes128_load_key_enc_only(const __m128i* enc_key, __m128i *key_schedu
 		cipher_blk =_mm_aesenclast_si128(cipher_blk, sched[10]);\
 	} while(0)
 
+#define ek2(blk_cipher, key)                            \
+    do{                                                 \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher = _mm_aesenc_si128(blk_cipher, key); \
+		blk_cipher =_mm_aesenclast_si128(blk_cipher, key);\
+	}while(0)
+
 //end of marcos---------------------------------------------
 
 static void cmpt_4_blks(block *cipher_blks, uint16_t counter, const char *log_msg, const block *sched, block sign_keys)
@@ -496,8 +510,10 @@ void crypto_int_all(void)
 	current_key = xor_block(init_pair[1], s_0);
 
 	// 初始化LightMAC需要的密钥
-	get_random_bytes(&light_current_key, sizeof(block));
-	get_random_bytes(&light_current_state, sizeof(block));
+	get_random_bytes(&light_current_key1, sizeof(block));
+	get_random_bytes(&light_current_state1, sizeof(block));
+	get_random_bytes(&light_current_key2, sizeof(block));
+	get_random_bytes(&light_current_state2, sizeof(block));
 
 	kernel_fpu_end();
 }
@@ -705,12 +721,18 @@ unsigned char my_pad[16];
 		//pr_info("no remaining!");
 	}
 #endif
+	ek2(tag_blks[2], light_current_key2);   // 最后结果经过aes，可以截取前t位
+
 	// 更新密钥
-	cipher_blks[0] = xor_block(light_current_state, _mm_setr_epi32(0x0000, 0x0000, 0x0000, 0x0000));/*0 for updatting state*/
+	cipher_blks[0] = xor_block(light_current_state1, _mm_setr_epi32(0x0000, 0x0000, 0x0000, 0x0000));/*0 for updatting state*/
 	cipher_blks[1] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0001, 0x0000, 0x0000, 0x0000));/*1 for updatting key2*/
-	AES_ECB_2(cipher_blks, sched);
-    light_current_key = xor_block(cipher_blks[1], light_current_state);
-	light_current_state = xor_block(cipher_blks[0], light_current_state);
+	cipher_blks[2] = xor_block(cipher_blks[0], _mm_setr_epi32(0x0003, 0x0000, 0x0000, 0x0000));/*11 for updatting key1*/
+    AES_ECB_3(cipher_blks, sched);
+	light_current_key1 = xor_block(cipher_blks[1], light_current_state1);
+	light_current_state1 = xor_block(cipher_blks[0], light_current_state1);
+
+	light_current_key2 = xor_block(cipher_blks[2], light_current_state2);
+	light_current_state2 = xor_block(cipher_blks[0], light_current_state2);
 
 	__u64 out_tmp[2];
 	_mm_store_si128((block*)out_tmp, tag_blks[2]); // 只要前64位作为输出
@@ -1032,7 +1054,7 @@ void sign_benchmarking_quicklog_lightmac(void){
 	for(int i = 0;i < test_rounds;i++){
 		start_time = ktime_get_ns();
 		kernel_fpu_begin();
-		aes128_load_key_enc_only(&light_current_key, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
+		aes128_load_key_enc_only(&light_current_key1, rounds_keys); // 根据user_key(light_current_key)生成11个轮密钥
 		sign_tag = light_mac_with_tradtional_mac(str, len, rounds_keys);
 		kernel_fpu_end();
 		end_time = ktime_get_ns();
